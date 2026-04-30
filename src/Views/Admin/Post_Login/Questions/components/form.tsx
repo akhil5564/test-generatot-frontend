@@ -4,11 +4,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React from "react";
 import { Form, Input, Select, Button, Card, Row, Col, Space, Divider, InputNumber, Upload, message, Modal, Spin } from "antd";
-import { PlusOutlined, MinusCircleOutlined, UploadOutlined } from "@ant-design/icons";
+import { PlusOutlined, MinusCircleOutlined, UploadOutlined, DeleteOutlined, SettingOutlined } from "@ant-design/icons";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import PageHeader from "@/Components/common/PageHeader";
 import axios from "axios";
-import { API, GET, BASE_URL } from "@/Components/common/api";
+import { API, GET, POST, PUT, DELETE, BASE_URL } from "@/Components/common/api";
 import MathInput from "./MathInput";
 // Cropping functionality removed
 
@@ -35,6 +35,14 @@ const QuestionForm = () => {
   const [chaptersLoading, setChaptersLoading] = React.useState<boolean>(false);
   const [uploadingImages, setUploadingImages] = React.useState<Record<number, boolean>>({});
   const [loadingQuestionData, setLoadingQuestionData] = React.useState<boolean>(false);
+  const [customTitles, setCustomTitles] = React.useState<Record<string, Array<{ name: string; _id: string }>>>({});
+  const [isManageModalVisible, setIsManageModalVisible] = React.useState(false);
+  const [currentManageType, setCurrentManageType] = React.useState<string>("");
+  const [deletingTitle, setDeletingTitle] = React.useState<string | null>(null);
+  const [isTitleModalVisible, setIsTitleModalVisible] = React.useState(false);
+  const [newTitle, setNewTitle] = React.useState("");
+  const [currentQuestionForTitle, setCurrentQuestionForTitle] = React.useState<number | null>(null);
+  const [savingTitle, setSavingTitle] = React.useState(false);
 
   // Image upload modal states
   const [imageModalVisible, setImageModalVisible] = React.useState(false);
@@ -150,8 +158,27 @@ const QuestionForm = () => {
     }
   };
 
+  // Fetch custom titles from backend
+  const fetchCustomTitles = async () => {
+    try {
+      const response = await GET(API.QUESTION_TITLES);
+      if (Array.isArray(response)) {
+        // Group titles by type
+        const grouped = response.reduce((acc: Record<string, Array<{ name: string; _id: string }>>, curr: any) => {
+          if (!acc[curr.type]) acc[curr.type] = [];
+          acc[curr.type].push({ name: curr.name, _id: curr._id });
+          return acc;
+        }, {});
+        setCustomTitles(grouped);
+      }
+    } catch (error) {
+      console.error('Failed to fetch custom titles:', error);
+    }
+  };
+
   React.useEffect(() => {
     fetchSubjects();
+    fetchCustomTitles();
   }, []);
 
 
@@ -169,86 +196,32 @@ const QuestionForm = () => {
   };
 
   // Question title options based on question type
-  const questionTitleOptions: Record<string, Array<{ value: string; label: string }>> = {
+  const DEFAULT_TITLES: Record<string, string[]> = {
     mcq: [
-      {
-        value: "Choose the correct answer from the brackets and fill in the blanks",
-        label: "Choose the correct answer from the brackets and fill in the blanks",
-      },
-      {
-        value: "Tick the correct answers",
-        label: "Tick the correct answers",
-      },
-      {
-        value: "Choose the correct answers",
-        label: "Choose the correct answers",
-      },
+      "Choose the correct answer from the brackets and fill in the blanks",
+      "Tick the correct answers",
+      "Choose the correct answers",
     ],
     fillblank: [
-      {
-        value: "Fill in the blanks with correct answers",
-        label: "Fill in the blanks with correct answers",
-      },
-      {
-        value: "Write true or false",
-        label: "Write true or false",
-      },
-      {
-        value: "Name the following",
-        label: "Name the following",
-      },
-      {
-        value: "Tick the odd one in the following",
-        label: "Tick the odd one in the following",
-      },
-      {
-        value: "Match the following",
-        label: "Match the following",
-      },
-      {
-        value: "Give one word of the following",
-        label: "Give one word of the following",
-      },
+      "Fill in the blanks with correct answers",
+      "Write true or false",
+      "Name the following",
+      "Tick the odd one in the following",
+      "Match the following",
+      "Give one word of the following",
     ],
     shortanswer: [
-      {
-        value: "Define the following",
-        label: "Define the following",
-      },
-      {
-        value: "Short Answer Questions",
-        label: "Short Answer Questions",
-      },
-      {
-        value: "Long Answer Questions",
-        label: "Long Answer Questions",
-      },
-      {
-        value: "Paragraph Writing",
-        label: "Paragraph Writing",
-      },
-      {
-        value: "Essay Writing",
-        label: "Essay Writing",
-      },
-      {
-        value: "Letter Writing",
-        label: "Letter Writing",
-      },
+      "Define the following",
+      "Short Answer Questions",
+      "Long Answer Questions",
+      "Paragraph Writing",
+      "Essay Writing",
+      "Letter Writing",
     ],
     image: [
-      {
-        value: "Identity the pictures",
-        label: "Identity the pictures",
-      },
-      {
-        value: "Look at the pictures and answer the following",
-        label: "Look at the pictures and answer the following",
-      },
-      {
-        value: "Describe the following picture.",
-        label: "Describe the following picture.",
-      },
+      "Identity the pictures",
+      "Look at the pictures and answer the following",
+      "Describe the following picture.",
     ],
   };
 
@@ -1174,23 +1147,58 @@ const QuestionForm = () => {
                             label="Question Title"
                             rules={[{ required: true, message: 'Please select question title!' }]}
                           >
-                            <Select
-                              size="large"
-                              placeholder="Select question title"
-                              onChange={(value) => handleQuestionTitleChange(name, value)}
-                              disabled={
-                                !form.getFieldValue(['questions', name, 'questionType']) ||
-                                !questionTitleOptions[
-                                form.getFieldValue(['questions', name, 'questionType'])
-                                ]
-                              }
-                              options={
-                                questionTitleOptions[
-                                form.getFieldValue(['questions', name, 'questionType'])
-                                ] || []
-                              }
-                              allowClear
-                            />
+                            <div className="flex items-center gap-2">
+                              <Select
+                                size="large"
+                                placeholder="Select question title"
+                                className="flex-grow"
+                                onChange={(value) => handleQuestionTitleChange(name, value)}
+                                disabled={
+                                  !form.getFieldValue(['questions', name, 'questionType'])
+                                }
+                                options={[
+                                  ...(DEFAULT_TITLES[form.getFieldValue(['questions', name, 'questionType'])] || []).map(t => ({ value: t, label: t })),
+                                  ...(customTitles[form.getFieldValue(['questions', name, 'questionType'])] || []).map(t => ({ value: t.name, label: t.name }))
+                                ]}
+                                allowClear
+                              />
+                              <Button
+                                icon={<SettingOutlined />}
+                                size="large"
+                                style={{
+                                  backgroundColor: "#52c41a",
+                                  borderColor: "#52c41a",
+                                  color: "white"
+                                }}
+                                onClick={() => {
+                                  const type = form.getFieldValue(['questions', name, 'questionType']);
+                                  if (!type) {
+                                    message.warning("Please select a question type first!");
+                                    return;
+                                  }
+                                  setCurrentManageType(type);
+                                  setIsManageModalVisible(true);
+                                }}
+                              />
+                              <Button
+                                icon={<PlusOutlined />}
+                                size="large"
+                                style={{
+                                  backgroundColor: "#007575",
+                                  borderColor: "#007575",
+                                  color: "white"
+                                }}
+                                onClick={() => {
+                                  const type = form.getFieldValue(['questions', name, 'questionType']);
+                                  if (!type) {
+                                    message.warning("Please select a question type first!");
+                                    return;
+                                  }
+                                  setCurrentQuestionForTitle(name);
+                                  setIsTitleModalVisible(true);
+                                }}
+                              />
+                            </div>
                           </Form.Item>
                         </Col>
                         <Col xs={24} sm={12} md={8} lg={8} xl={8}>
@@ -1429,6 +1437,130 @@ const QuestionForm = () => {
           <div style={{ color: '#666' }}>
             <p>Preview your selected image. Click "Upload Image" to proceed.</p>
           </div>
+        </div>
+      </Modal>
+      {/* Custom Title Modal */}
+      <Modal
+        title="Add Custom Question Title"
+        open={isTitleModalVisible}
+        onCancel={() => {
+          setIsTitleModalVisible(false);
+          setNewTitle("");
+        }}
+        footer={[
+          <Button key="cancel" onClick={() => {
+            setIsTitleModalVisible(false);
+            setNewTitle("");
+          }}>
+            Cancel
+          </Button>,
+          <Button
+            key="save"
+            type="primary"
+            style={{ backgroundColor: "#007575", borderColor: "#007575" }}
+            loading={savingTitle}
+            onClick={async () => {
+              if (!newTitle.trim()) {
+                message.warning("Please enter a title");
+                return;
+              }
+              const type = form.getFieldValue(['questions', currentQuestionForTitle!, 'questionType']);
+              
+              setSavingTitle(true);
+              try {
+                // Call backend to save new title
+                await POST(API.QUESTION_TITLES, { name: newTitle, type: type });
+                
+                // Refresh titles from backend
+                await fetchCustomTitles();
+                
+                // Select the newly added title
+                const questions = form.getFieldValue('questions');
+                questions[currentQuestionForTitle!].questionTitle = newTitle;
+                form.setFieldValue('questions', questions);
+                
+                message.success("Title added successfully!");
+                setIsTitleModalVisible(false);
+                setNewTitle("");
+              } catch (error: any) {
+                const errMsg = error?.message || "Failed to save title";
+                message.error(errMsg);
+              } finally {
+                setSavingTitle(false);
+              }
+            }}
+          >
+            Save Title
+          </Button>
+        ]}
+      >
+        <div className="py-4">
+          <Input
+            placeholder="Enter custom question title"
+            size="large"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            onPressEnter={() => {
+              // Trigger save if enter is pressed
+            }}
+          />
+        </div>
+      </Modal>
+      {/* Manage Titles Modal */}
+      <Modal
+        title={`Manage ${QUESTION_TYPE_LABELS[currentManageType] || ''} Titles`}
+        open={isManageModalVisible}
+        onCancel={() => setIsManageModalVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setIsManageModalVisible(false)}>
+            Close
+          </Button>
+        ]}
+      >
+        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+          {(customTitles[currentManageType] || []).length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '20px', color: '#999' }}>
+              No custom titles found for this type.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {(customTitles[currentManageType] || []).map((title) => (
+                <div 
+                  key={title._id} 
+                  style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    backgroundColor: '#f5f5f5',
+                    borderRadius: '4px',
+                    marginBottom: '8px'
+                  }}
+                >
+                  <span>{title.name}</span>
+                  <Button
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    loading={deletingTitle === title._id}
+                    onClick={async () => {
+                      setDeletingTitle(title._id);
+                      try {
+                        await DELETE(`${API.QUESTION_TITLES}/${title._id}`);
+                        message.success("Title deleted successfully!");
+                        await fetchCustomTitles();
+                      } catch (error: any) {
+                        const errMsg = error?.message || "Failed to delete title";
+                        message.error(errMsg);
+                      } finally {
+                        setDeletingTitle(null);
+                      }
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </Modal>
     </>

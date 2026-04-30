@@ -208,6 +208,12 @@ const Paper = () => {
   const [activeFilterSubtypes, setActiveFilterSubtypes] = useState<Record<string, string[]>>({});
   const chooserRef = useRef<HTMLDivElement | null>(null);
   const topRef = useRef<HTMLDivElement | null>(null);
+  const [customTitles, setCustomTitles] = useState<Record<string, { name: string; _id: string }[]>>({
+    mcq: [],
+    fillblank: [],
+    shortanswer: [],
+    image: []
+  });
 
   // Get user from Redux
   const user = useSelector((state: any) => state.user.user);
@@ -295,9 +301,28 @@ const Paper = () => {
     }
   };
 
-  // Load subjects on component mount
+  // Fetch custom titles from backend
+  const fetchCustomTitles = async () => {
+    try {
+      const data = await GET(API.QUESTION_TITLES);
+      if (Array.isArray(data)) {
+        const grouped = data.reduce((acc: any, title: any) => {
+          const type = title.type || 'mcq';
+          if (!acc[type]) acc[type] = [];
+          acc[type].push({ name: title.name, _id: title._id });
+          return acc;
+        }, { mcq: [], fillblank: [], shortanswer: [], image: [] });
+        setCustomTitles(grouped);
+      }
+    } catch (error) {
+      console.error('Failed to fetch custom titles:', error);
+    }
+  };
+
+  // Load subjects and custom titles on component mount
   useEffect(() => {
     fetchSubjects();
+    fetchCustomTitles();
   }, []);
 
   // Fetch chapters based on class, subject, and book
@@ -451,39 +476,38 @@ const Paper = () => {
       // Collect question titles from selected subtypes (one per type if available)
       const questionTitleLabels: string[] = [];
 
-      if (english) {
-        // For English, sections are passed as separate section parameter
-        // Don't add to questionTitleLabels for English
-      } else {
-        const collectLabels = <T extends { label: string; value: string }>(opts: T[], values: string | string[] | undefined) => {
-          if (!values) return;
-          const arr = Array.isArray(values) ? values : [values];
-          arr.forEach(v => {
-            const label = opts.find(o => o.value === v)?.label;
-            if (label) questionTitleLabels.push(label);
-          });
-        };
+      const collectLabels = <T extends { label: string; value: string }>(opts: T[], values: string | string[] | undefined) => {
+        if (!values) return;
+        const arr = Array.isArray(values) ? values : [values];
+        arr.forEach(v => {
+          const opt = opts.find(o => o.value === v);
+          if (opt) {
+            questionTitleLabels.push(opt.label);
+          } else {
+            // If not found in hardcoded options, it's a custom title (v is the label)
+            questionTitleLabels.push(v);
+          }
+        });
+      };
 
-        if (selectedTypes.includes('multiplechoice')) collectLabels(mcqSubtypeOptions, mcqSubtype);
-        if (selectedTypes.includes('direct')) collectLabels(directSubtypeOptions, directSubtype);
-        if (selectedTypes.includes('answerthefollowing')) collectLabels(answerFollowingSubtypeOptions, answerFollowingSubtype);
-        if (selectedTypes.includes('picture')) collectLabels(pictureSubtypeOptions, pictureSubtype);
+      if (selectedTypes.includes('multiplechoice')) collectLabels(mcqSubtypeOptions, mcqSubtype);
+      if (selectedTypes.includes('direct')) collectLabels(directSubtypeOptions, directSubtype);
+      if (selectedTypes.includes('answerthefollowing')) collectLabels(answerFollowingSubtypeOptions, answerFollowingSubtype);
+      if (selectedTypes.includes('picture')) collectLabels(pictureSubtypeOptions, pictureSubtype);
 
-        // Apply granular filter overrides if present
-        const effectiveTitles = overrideTitles || Object.values(activeFilterSubtypes).flat();
-        if (effectiveTitles.length > 0) {
-          // Apply granular filters
-          // If overrides provided, use them directly (clearing previous)
-          if (overrideTitles) {
+      // Apply granular filter overrides if present
+      const effectiveTitles = overrideTitles || Object.values(activeFilterSubtypes).flat();
+      if (effectiveTitles.length > 0) {
+        // If overrides provided, use them directly (clearing previous)
+        if (overrideTitles) {
+          questionTitleLabels.length = 0;
+          questionTitleLabels.push(...overrideTitles);
+        } else if (Object.keys(activeFilterSubtypes).length > 0) {
+          // Otherwise use active filters if established
+          const activeTitles = Object.values(activeFilterSubtypes).flat();
+          if (activeTitles.length > 0) {
             questionTitleLabels.length = 0;
-            questionTitleLabels.push(...overrideTitles);
-          } else if (Object.keys(activeFilterSubtypes).length > 0) {
-            // Otherwise use active filters if established
-            const activeTitles = Object.values(activeFilterSubtypes).flat();
-            if (activeTitles.length > 0) {
-              questionTitleLabels.length = 0;
-              questionTitleLabels.push(...activeTitles);
-            }
+            questionTitleLabels.push(...activeTitles);
           }
         }
       }
@@ -1756,61 +1780,81 @@ const Paper = () => {
               {selectedTypes.includes('multiplechoice') && (
                 <div className="mt-4">
                   <div className="mb-2 text-gray-700 font-medium">Multiple Choice Questions title</div>
-                  <Select
-                    mode="multiple"
-                    size="large"
-                    placeholder="Select MCQ type"
-                    value={mcqSubtype}
-                    onChange={(value) => setMcqSubtype(value)}
-                    options={mcqSubtypeOptions}
-                    className="w-full"
-                    allowClear
-                  />
+                  <div className="flex items-center gap-2">
+                    <Select
+                      mode="multiple"
+                      size="large"
+                      placeholder="Select MCQ type"
+                      value={mcqSubtype}
+                      onChange={(value) => setMcqSubtype(value)}
+                      options={[
+                        ...mcqSubtypeOptions,
+                        ...(customTitles['mcq'] || []).map(t => ({ label: t.name, value: t.name }))
+                      ]}
+                      className="w-full"
+                      allowClear
+                    />
+                  </div>
                 </div>
               )}
               {selectedTypes.includes('direct') && (
                 <div className="mt-4">
                   <div className="mb-2 text-gray-700 font-medium">Direct Questions title</div>
-                  <Select
-                    mode="multiple"
-                    size="large"
-                    placeholder="Select Direct Questions type"
-                    value={directSubtype}
-                    onChange={(value) => setDirectSubtype(value)}
-                    options={directSubtypeOptions}
-                    className="w-full"
-                    allowClear
-                  />
+                  <div className="flex items-center gap-2">
+                    <Select
+                      mode="multiple"
+                      size="large"
+                      placeholder="Select Direct Questions type"
+                      value={directSubtype}
+                      onChange={(value) => setDirectSubtype(value)}
+                      options={[
+                        ...directSubtypeOptions,
+                        ...(customTitles['fillblank'] || []).map(t => ({ label: t.name, value: t.name }))
+                      ]}
+                      className="w-full"
+                      allowClear
+                    />
+                  </div>
                 </div>
               )}
               {selectedTypes.includes('answerthefollowing') && (
                 <div className="mt-4">
                   <div className="mb-2 text-gray-700 font-medium">Answer the following questions title</div>
-                  <Select
-                    mode="multiple"
-                    size="large"
-                    placeholder="Select Answer the following questions type"
-                    value={answerFollowingSubtype}
-                    onChange={(value) => setAnswerFollowingSubtype(value)}
-                    options={answerFollowingSubtypeOptions}
-                    className="w-full"
-                    allowClear
-                  />
+                  <div className="flex items-center gap-2">
+                    <Select
+                      mode="multiple"
+                      size="large"
+                      placeholder="Select Answer the following questions type"
+                      value={answerFollowingSubtype}
+                      onChange={(value) => setAnswerFollowingSubtype(value)}
+                      options={[
+                        ...answerFollowingSubtypeOptions,
+                        ...(customTitles['shortanswer'] || []).map(t => ({ label: t.name, value: t.name }))
+                      ]}
+                      className="w-full"
+                      allowClear
+                    />
+                  </div>
                 </div>
               )}
               {selectedTypes.includes('picture') && (
                 <div className="mt-4">
                   <div className="mb-2 text-gray-700 font-medium">Picture questions title</div>
-                  <Select
-                    mode="multiple"
-                    size="large"
-                    placeholder="Select Picture questions type"
-                    value={pictureSubtype}
-                    onChange={(value) => setPictureSubtype(value)}
-                    options={pictureSubtypeOptions}
-                    className="w-full"
-                    allowClear
-                  />
+                  <div className="flex items-center gap-2">
+                    <Select
+                      mode="multiple"
+                      size="large"
+                      placeholder="Select Picture questions type"
+                      value={pictureSubtype}
+                      onChange={(value) => setPictureSubtype(value)}
+                      options={[
+                        ...pictureSubtypeOptions,
+                        ...(customTitles['image'] || []).map(t => ({ label: t.name, value: t.name }))
+                      ]}
+                      className="w-full"
+                      allowClear
+                    />
+                  </div>
                 </div>
               )}
             </div>
@@ -1852,7 +1896,10 @@ const Paper = () => {
                                 <div>
                                   <div className="font-semibold text-gray-700 bg-gray-100 px-2 py-1 mb-2 rounded">Multiple Choice</div>
                                   <div className="pl-2 space-y-1">
-                                    {mcqSubtypeOptions.map(opt => (
+                                    {[
+                                      ...mcqSubtypeOptions,
+                                      ...(customTitles['mcq'] || []).map(t => ({ label: t.name, value: t.name }))
+                                    ].map(opt => (
                                       <div key={opt.value}>
                                         <Checkbox
                                           checked={tempFilterSubtypes['multiplechoice']?.includes(opt.label)}
@@ -1879,7 +1926,10 @@ const Paper = () => {
                                 <div>
                                   <div className="font-semibold text-gray-700 bg-gray-100 px-2 py-1 mb-2 rounded">Direct Questions</div>
                                   <div className="pl-2 space-y-1">
-                                    {directSubtypeOptions.map(opt => (
+                                    {[
+                                      ...directSubtypeOptions,
+                                      ...(customTitles['fillblank'] || []).map(t => ({ label: t.name, value: t.name }))
+                                    ].map(opt => (
                                       <div key={opt.value}>
                                         <Checkbox
                                           checked={tempFilterSubtypes['direct']?.includes(opt.label)}
@@ -1906,7 +1956,10 @@ const Paper = () => {
                                 <div>
                                   <div className="font-semibold text-gray-700 bg-gray-100 px-2 py-1 mb-2 rounded">Answer The Following</div>
                                   <div className="pl-2 space-y-1">
-                                    {answerFollowingSubtypeOptions.map(opt => (
+                                    {[
+                                      ...answerFollowingSubtypeOptions,
+                                      ...(customTitles['shortanswer'] || []).map(t => ({ label: t.name, value: t.name }))
+                                    ].map(opt => (
                                       <div key={opt.value}>
                                         <Checkbox
                                           checked={tempFilterSubtypes['answerthefollowing']?.includes(opt.label)}
@@ -1933,7 +1986,10 @@ const Paper = () => {
                                 <div>
                                   <div className="font-semibold text-gray-700 bg-gray-100 px-2 py-1 mb-2 rounded">Picture Questions</div>
                                   <div className="pl-2 space-y-1">
-                                    {pictureSubtypeOptions.map(opt => (
+                                    {[
+                                      ...pictureSubtypeOptions,
+                                      ...(customTitles['image'] || []).map(t => ({ label: t.name, value: t.name }))
+                                    ].map(opt => (
                                       <div key={opt.value}>
                                         <Checkbox
                                           checked={tempFilterSubtypes['picture']?.includes(opt.label)}
@@ -2298,7 +2354,7 @@ const Paper = () => {
         </Modal>
 
       </div >
-    </ConfigProvider >
+    </ConfigProvider>
   );
 };
 

@@ -2,7 +2,9 @@
 // Lightweight API helper
 import { message } from "antd";
 
-export const BASE_URL = "https://childcraft-server.onrender.com";
+// export const BASE_URL = "https://childcraft-server.onrender.com";
+export const BASE_URL = "http://localhost:5000";
+
 
 export const API = {
   BASE: "",
@@ -16,7 +18,8 @@ export const API = {
   QUESTION: "/qustion",
   UPLOAD: "/upload",
   QUIZ_ITEMS: "/quizItems",
-  BOOKED:"/booked"
+  BOOKED:"/booked",
+  QUESTION_TITLES: "/question-titles"
 };
 
 const buildUrl = (endpoint: string, query?: Record<string, any>) => {
@@ -69,7 +72,14 @@ export const POST = async (
     body: isFormData ? (body as FormData) : JSON.stringify(body || {}),
   });
   
-  const data = await res.json();
+  const text = await res.text();
+  let data: any = {};
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    console.error("Failed to parse JSON response:", text);
+    throw new Error(`Server returned non-JSON response (Status ${res.status}). Please check if the backend is running and the BASE_URL is correct.`);
+  }
   
   if (res.status === 400) {
     let msg = data?.message || "Bad Request";
