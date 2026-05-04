@@ -280,7 +280,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
     const sectionMap: Record<string, string> = {
       'SECTIONA': 'SECTION - A (READING)',
       'SECTIONB': 'SECTION - B (WRITING)',
-      'SECTIONC': 'SECTION - C (GRAMMER)',
+      'SECTIONC': 'SECTION - C (GRAMMAR)',
       'SECTIOND': 'SECTION - D (TEXTUAL QUESTIONS)'
     };
     return sectionMap[sectionUpper] || null;
@@ -412,8 +412,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
 
   // Helper to resolve Roman numerals for sub-questions
   const getRomanSubIndex = (index: number) => {
-    const romans = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"];
-    return romans[index] || `${index + 1}`;
+    return `${index + 1}`;
   };
 
   // Helper to calculate total marks for the paper
@@ -423,7 +422,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
 
   const renderQuestionSection = (group: { section?: string, sectionDisplay?: string, title: string, questions: any[] }, groupIndex: number, previousSection?: string) => {
     const { section, sectionDisplay, title, questions } = group;
-    const sectionRoman = toRomanNumeral(groupIndex + 1);
+    const sectionNumber = `${groupIndex + 1}`;
 
     // Show section header if section changed and it's English subject
     const showSectionHeader = isEnglishSubject && sectionDisplay && section !== previousSection;
@@ -435,7 +434,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
       const allSame = questions.every((q: any) => (q.mark || q.marks || 0) === firstMark);
       if (allSame && firstMark > 0) {
         const totalMarks = firstMark * questions.length;
-        markBreakdown = `[${formatMarks(firstMark)} x ${questions.length} = ${formatMarks(totalMarks)}]`;
+        markBreakdown = `(${questions.length} x ${formatMarks(firstMark)} = ${formatMarks(totalMarks)})`;
       }
     }
     const showIndividualMarks = !markBreakdown;
@@ -452,6 +451,17 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
     const cleanLowerTitle = title.trim().toLowerCase().replace(/\.$/, '');
 
     if (pictureTitles.some(t => cleanLowerTitle === t || cleanLowerTitle.startsWith(t))) {
+      // Logic: If title is generic, try to use the first sub-question's text as the title instead
+      const firstQuestion = questions[0];
+      const hasSubQuestions = firstQuestion?.subQuestions && firstQuestion.subQuestions.length > 0;
+      let displayTitle = title;
+      let questionsToRenderAsSub = questions; // We'll handle sub-rendering inside the map
+
+      const isGeneric = pictureTitles.some(t => cleanLowerTitle === t);
+      if (isGeneric && hasSubQuestions) {
+        displayTitle = firstQuestion.subQuestions[0].text;
+      }
+
       return (
         <div key={`${section || ''}-${title}`} className="mb-6">
           {showSectionHeader && (
@@ -459,10 +469,13 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
-          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionRoman}. {title} <span className="float-right">{markBreakdown}</span></h3>
+          
+          <h3 className="text-lg font-semibold text-black mb-2 font-local2">
+            {sectionNumber}. {displayTitle} <span className="float-right">{markBreakdown}</span>
+          </h3>
+
           {questions.map((q, idx) => (
             <div key={idx} className="mb-4 ml-5">
-              {/* 1. Main Number (No Text) & Marks */}
               <div className="flex justify-between items-start text-lg text-black font-local2 mb-2">
                 <div className="flex-1 pr-4">
                   <span className="mr-2">{getRomanSubIndex(idx)})</span>
@@ -472,7 +485,19 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
                 </div>
               </div>
 
-              {/* 2. Image */}
+              {/* Render sub-questions, but skip the first one of the first question if we used it as title */}
+              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : []).map((subQ: any, subIdx: number) => {
+                if (isGeneric && idx === 0 && subIdx === 0) return null;
+                return (
+                  <div key={subIdx} className="mb-2 ml-6 flex justify-between items-start">
+                    <div className="flex-1 text-lg text-black font-local2 pr-4">
+                      <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
+                      <span>{renderMath(subQ.text || '', isMathSubject)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+
               {q.imageUrl && (
                 <div className="mb-3 ml-6">
                   <img
@@ -482,24 +507,22 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
                   />
                 </div>
               )}
-
-              {/* 3. Sub-questions a, b, c */}
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : []).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2 ml-6 flex justify-between items-start">
-                  <div className="flex-1 text-lg text-black font-local2 pr-4">
-                    <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
-                    <span>{renderMath(subQ.text || '', isMathSubject)}</span>
-                  </div>
-                </div>
-              ))}
             </div>
           ))}
         </div>
       );
     }
 
-    // Case 1: "Choose the correct answer from the brackets and fill in the blanks"
-    if (title.trim() === "Choose the correct answer from the brackets and fill in the blanks") {
+    // Case 1: "Fill in the blanks" (and variants)
+    const fillInBlanksTitles = [
+      "fill in the blanks",
+      "fill in the blanks with correct answers",
+      "fill in the blanks with 'a' or 'an'",
+      "choose the correct answer from the brackets and fill in the blanks"
+    ];
+    const isFillInBlanks = fillInBlanksTitles.some(t => cleanLowerTitle === t || cleanLowerTitle.startsWith(t));
+
+    if (isFillInBlanks) {
       return (
         <div key={`${section || ''}-${title}`} className="mb-6">
           {showSectionHeader && (
@@ -507,35 +530,41 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
-          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionRoman}. {title} <span className="float-right">{markBreakdown}</span></h3>
+          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionNumber}. {title} <span className="float-right">{markBreakdown}</span></h3>
           {questions.map((q, idx) => (
             <div key={idx} className="mb-4 ml-5">
-              {/* Always Render Question Text if present */}
-              {q.question && <div className="text-lg text-black font-local2 mb-2 hidden">{q.question}</div>}
-              {/* Note: In sample API, q.question might be duplicate of first subquestion or main text. Subquestions are primary if present. */}
-
-              {/* Subquestions */}
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2 flex justify-between items-start">
-                  <div className="flex-1 text-lg text-black font-local2 pr-4">
-                    <span className="mr-2">{getRomanSubIndex(idx)})</span>
-                    <span>{renderMath(subQ.text || q.question, isMathSubject)}</span>
-                    {q.options && q.options.length > 0 && (
-                      <span className="ml-4 font-semibold">
-                        ({q.options.map((opt: string, i: number) => (
-                          <span key={i}>
-                            {renderMath(opt, isMathSubject)}
-                            {i < q.options.length - 1 ? ', ' : ''}
-                          </span>
-                        ))})
-                      </span>
-                    )}
+              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => {
+                const text = subQ.text || q.question || "";
+                // If the text contains multiple numbered items (e.g. "1. ... 2. ..."), split them
+                const parts = text.split(/(?=\d+\.)/).filter(p => p.trim());
+                
+                return (
+                  <div key={subIdx} className="mb-2 flex flex-col gap-2">
+                    {parts.map((part: string, pIdx: number) => (
+                      <div key={pIdx} className="flex justify-between items-start">
+                        <div className="flex-1 text-lg text-black font-local2 pr-4">
+                          {/* Only show the 1) prefix if we didn't just split a numbered list or if it's the first part of a single item */}
+                          {parts.length === 1 && <span className="mr-2">{getRomanSubIndex(idx)})</span>}
+                          <span>{renderMath(part.trim(), isMathSubject)}</span>
+                          {q.options && q.options.length > 0 && (
+                            <span className="ml-4 font-semibold">
+                              ({q.options.map((opt: string, i: number) => (
+                                <span key={i}>
+                                  {renderMath(opt, isMathSubject)}
+                                  {i < q.options.length - 1 ? ', ' : ''}
+                                </span>
+                              ))})
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
+                          {showIndividualMarks && subIdx === 0 && pIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
-                    {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </div>
@@ -551,7 +580,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
-          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionRoman}. {title} <span className="float-right">{markBreakdown}</span></h3>
+          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionNumber}. {title} <span className="float-right">{markBreakdown}</span></h3>
           {questions.map((q, idx) => (
             <div key={idx} className="mb-4 ml-5">
               {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
@@ -594,7 +623,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
-          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionRoman}. {title} <span className="float-right">{markBreakdown}</span></h3>
+          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionNumber}. {title} <span className="float-right">{markBreakdown}</span></h3>
 
           {questions.map((q, idx) => (
             <div key={idx} className="mb-6 ml-5">
@@ -644,7 +673,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
-          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionRoman}. {title} <span className="float-right">{markBreakdown}</span></h3>
+          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionNumber}. {title} <span className="float-right">{markBreakdown}</span></h3>
           {questions.map((q, idx) => (
             <div key={idx} className="mb-4 ml-5">
               {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
@@ -682,7 +711,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
-          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionRoman}. {title} <span className="float-right">{markBreakdown}</span></h3>
+          <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionNumber}. {title} <span className="float-right">{markBreakdown}</span></h3>
           {questions.map((q, idx) => (
             <div key={idx} className="mb-4 ml-5">
               {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
@@ -718,7 +747,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
             <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
           </div>
         )}
-        <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionRoman}. {title} <span className="float-right">{markBreakdown}</span></h3>
+        <h3 className="text-lg font-semibold text-black mb-2 font-local2">{sectionNumber}. {title} <span className="float-right">{markBreakdown}</span></h3>
         {questions.map((q, idx) => (
           <div key={idx} className="mb-4 ml-8">
             <div className="flex justify-between items-start text-lg text-black font-local2">
@@ -876,17 +905,27 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
           const allSame = questions.every((q: any) => (q.mark || q.marks || 0) === firstMark);
           if (allSame && firstMark > 0) {
             const totalMarks = firstMark * questions.length;
-            markBreakdown = `\t[${formatMarksForWord(firstMark)} x ${questions.length} = ${formatMarksForWord(totalMarks)}]`;
+            markBreakdown = `\t(${questions.length} x ${formatMarksForWord(firstMark)} = ${formatMarksForWord(totalMarks)})`;
           }
         }
         const showIndividualMarksWord = !markBreakdown;
+
+        // Logic: If title is generic, try to use the first sub-question's text as the title instead
+        const pictureTitles = ["describe the following picture", "look at the pictures and answer the following", "identify the pictures", "identity the pictures"];
+        const cleanLowerTitle = title.trim().toLowerCase().replace(/\.$/, '');
+        const isGenericPictureTitle = pictureTitles.some(t => cleanLowerTitle === t);
+        
+        let displayTitle = title;
+        if (isGenericPictureTitle && questions[0]?.subQuestions?.length > 0) {
+          displayTitle = questions[0].subQuestions[0].text;
+        }
 
         docChildren.push(
           new Paragraph({
             heading: HeadingLevel.HEADING2,
             children: [
-              new TextRun({ text: `${sectionRoman}. ${title}`, bold: true }),
-              new TextRun({ text: markBreakdown, bold: true }) // Tab is handled by \t in string if supported or we might need a tab stop
+              new TextRun({ text: `${sectionNumber}. ${displayTitle}`, bold: true }),
+              new TextRun({ text: markBreakdown, bold: true })
             ],
             tabStops: [
               { type: TabStopType.RIGHT, position: 9500 }
@@ -910,7 +949,7 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
           // Check if title matches any of the picture titles (ignoring case and trailing dots)
           const cleanLowerTitle = title.trim().toLowerCase().replace(/\.$/, '');
           if (pictureTitles.some(t => cleanLowerTitle === t || cleanLowerTitle.startsWith(t))) {
-            // 1. Render Main Question Line: i) Question Text [Marks]
+            // 1. Render Main Question Line: i) [Marks]
             const prefix = `${getRomanSubIndex(i)})`;
             const marks = (showIndividualMarksWord && (q.mark || q.marks)) ? ` [${formatMarksForWord(q.mark || q.marks)}]` : '';
 
@@ -926,7 +965,28 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               indent: { left: 250 }
             }));
 
-            // 2. Render Image
+            // 2. Render Sub-questions: a) Text - NOW ABOVE THE IMAGE
+            subQuestions.forEach((subQ: any, subIdx: number) => {
+              // Skip the first sub-question of the first question if we used it as the title
+              if (isGenericPictureTitle && i === 0 && subIdx === 0) return;
+
+              const subPrefix = `${String.fromCharCode(97 + subIdx)})`; // a), b), c)
+
+              const runChildren: any[] = [];
+              runChildren.push(new TextRun({ text: `${subPrefix} ` }));
+
+              const content = subQ.text || '';
+              const mixedRuns = renderMixedTextForWord(content, isMathSubject);
+              runChildren.push(...mixedRuns);
+
+              docChildren.push(new Paragraph({
+                children: runChildren,
+                indent: { left: 500 }, // Indent sub-questions
+                spacing: { after: 100 }
+              }));
+            });
+
+            // 3. Render Image - NOW BELOW SUB-QUESTIONS
             if (q.imageUrl) {
               try {
                 const imageBuffer = await fetchImageArrayBuffer(resolveImageUrl(q.imageUrl)) || await convertImageToArrayBufferViaCanvas(resolveImageUrl(q.imageUrl));
@@ -949,24 +1009,6 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
                 console.warn("Failed to add image to word doc", err);
               }
             }
-
-            // 3. Render Sub-questions: a) Text
-            subQuestions.forEach((subQ: any, subIdx: number) => {
-              const subPrefix = `${String.fromCharCode(97 + subIdx)})`; // a), b), c)
-
-              const runChildren: any[] = [];
-              runChildren.push(new TextRun({ text: `${subPrefix} ` }));
-
-              const content = subQ.text || '';
-              const mixedRuns = renderMixedTextForWord(content, isMathSubject);
-              runChildren.push(...mixedRuns);
-
-              docChildren.push(new Paragraph({
-                children: runChildren,
-                indent: { left: 500 }, // Indent sub-questions
-                spacing: { after: 100 }
-              }));
-            });
 
             continue; // Skip default rendering
           }
@@ -1074,43 +1116,61 @@ const ViewQuestionPaper = ({ paper, onBack, onDelete }: any) => {
               prefix = `${getRomanSubIndex(subIdx)})`;
             }
 
+            const content = subQ.text || q.question || '';
             // EXCLUDE marks for "Choose the correct answers" from the sub-question line as they are now in options
             const shouldShowMarksHere = lowerTitle !== "choose the correct answers";
-            const marks = (shouldShowMarksHere && showIndividualMarksWord && subIdx === 0 && (q.mark || q.marks)) ? ` [${q.mark || q.marks}]` : '';
 
-            const paragraphChildren: any[] = [];
+            // If it's a fill in the blanks question, check for numbered items and split
+            const fillInBlanksTitles = [
+              "fill in the blanks",
+              "fill in the blanks with correct answers",
+              "fill in the blanks with 'a' or 'an'",
+              "choose the correct answer from the brackets and fill in the blanks"
+            ];
+            const isFillInBlanksTitle = fillInBlanksTitles.some(t => lowerTitle === t || lowerTitle.startsWith(t));
+            
+            const parts = isFillInBlanksTitle ? content.split(/(?=\d+\.)/).filter(p => p.trim()) : [content];
 
-            // Add prefix
-            paragraphChildren.push(new TextRun({ text: prefix + " " }));
+            parts.forEach((part: string, pIdx: number) => {
+              const paragraphChildren: any[] = [];
+              
+              // Add prefix
+              // Only show the 1) prefix if we didn't just split a numbered list OR if it's the first part of a single item
+              if (parts.length === 1) {
+                paragraphChildren.push(new TextRun({ text: prefix + " " }));
+              }
 
-            const content = subQ.text || q.question || '';
-            const contentRuns = renderMixedTextForWord(content, isMathSubject);
-            paragraphChildren.push(...contentRuns);
+              const contentRuns = renderMixedTextForWord(part.trim(), isMathSubject);
+              paragraphChildren.push(...contentRuns);
 
-            // Handle "Choose the correct answer from the brackets and fill in the blanks" options inline
-            if (title.trim() === "Choose the correct answer from the brackets and fill in the blanks" && options && options.length > 0) {
-              paragraphChildren.push(new TextRun({ text: " (" }));
-              options.forEach((opt: string, optIdx: number) => {
-                const mixedRuns = renderMixedTextForWord(opt, isMathSubject);
-                paragraphChildren.push(...mixedRuns);
-                if (optIdx < options.length - 1) {
-                  paragraphChildren.push(new TextRun({ text: ", " }));
-                }
-              });
-              paragraphChildren.push(new TextRun({ text: ")" }));
-            }
+              // Handle options inline for certain fill-in-blanks variants
+              const inlineOptionsTitles = ["choose the correct answer from the brackets and fill in the blanks"];
+              if (inlineOptionsTitles.includes(lowerTitle) && options && options.length > 0) {
+                paragraphChildren.push(new TextRun({ text: " (" }));
+                options.forEach((opt: string, optIdx: number) => {
+                  const mixedRuns = renderMixedTextForWord(opt, isMathSubject);
+                  paragraphChildren.push(...mixedRuns);
+                  if (optIdx < options.length - 1) {
+                    paragraphChildren.push(new TextRun({ text: ", " }));
+                  }
+                });
+                paragraphChildren.push(new TextRun({ text: ")" }));
+              }
 
-            // Marks stay as normal text on the right.
-            paragraphChildren.push(new TextRun({ text: `\t${marks}`, bold: true }));
+              // Marks stay as normal text on the right.
+              // Only show marks for the first part of a split question
+              const marks = (shouldShowMarksHere && showIndividualMarksWord && subIdx === 0 && pIdx === 0 && (q.mark || q.marks)) ? ` [${q.mark || q.marks}]` : '';
+              paragraphChildren.push(new TextRun({ text: `\t${marks}`, bold: true }));
 
-            docChildren.push(new Paragraph({
-              tabStops: [
-                { type: TabStopType.RIGHT, position: 9500 }
-              ],
-              children: paragraphChildren,
-              spacing: { after: title.trim() === "Tick the correct answers" ? 50 : 100 },
-              indent: { left: title.trim() === "Choose the correct answers" ? 500 : 250 }
-            }));
+              docChildren.push(new Paragraph({
+                tabStops: [
+                  { type: TabStopType.RIGHT, position: 9500 }
+                ],
+                children: paragraphChildren,
+                spacing: { after: lowerTitle === "tick the correct answers" ? 50 : 100 },
+                indent: { left: lowerTitle === "choose the correct answers" ? 500 : 250 }
+              }));
+            });
 
             if (title.trim() === "Tick the correct answers") {
               const optionChildren: any[] = [];

@@ -747,8 +747,7 @@ const Paper = () => {
   };
 
   const getRomanSubIndex = (index: number) => {
-    const romans = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"];
-    return romans[index] || `${index + 1}`;
+    return `${index + 1}`;
   };
 
   // Build a "paper-like" questions array from currently selected questions
@@ -815,7 +814,7 @@ const Paper = () => {
       const sectionMap: Record<string, string> = {
         SectionA: 'SECTION - A (READING)',
         SectionB: 'SECTION - B (WRITING)',
-        SectionC: 'SECTION - C (GRAMMER)',
+        SectionC: 'SECTION - C (GRAMMAR)',
         SectionD: 'SECTION - D (TEXTUAL QUESTIONS)',
       };
 
@@ -893,7 +892,7 @@ const Paper = () => {
     previousSection?: string,
   ) => {
     const { section, sectionDisplay, title, questions } = group;
-    const sectionRoman = toRomanNumeral(groupIndex + 1);
+    const sectionNumber = `${groupIndex + 1}`;
 
     const subject = String(formValues?.subject || '').trim().toLowerCase();
     const isEnglish = subject === 'english';
@@ -906,7 +905,7 @@ const Paper = () => {
       const allSame = questions.every((q: any) => (q.mark || q.marks || 0) === firstMark);
       if (allSame && firstMark > 0) {
         const totalMarks = firstMark * questions.length;
-        markBreakdown = `[${formatMarks(firstMark)} x ${questions.length} = ${formatMarks(totalMarks)}]`;
+        markBreakdown = `(${questions.length} x ${formatMarks(firstMark)} = ${formatMarks(totalMarks)})`;
       }
     }
     const showIndividualMarks = !markBreakdown;
@@ -921,6 +920,15 @@ const Paper = () => {
 
     // Picture questions
     if (pictureTitles.some((t) => cleanLowerTitle === t || cleanLowerTitle.startsWith(t))) {
+      const firstQuestion = questions[0];
+      const hasSubQuestions = firstQuestion?.subQuestions && firstQuestion.subQuestions.length > 0;
+      let displayTitle = title;
+
+      const isGeneric = pictureTitles.some(t => cleanLowerTitle === t);
+      if (isGeneric && hasSubQuestions) {
+        displayTitle = firstQuestion.subQuestions[0].text;
+      }
+
       return (
         <div key={`${section || ''}-${title}`} className="mb-6">
           {showSectionHeader && (
@@ -928,9 +936,11 @@ const Paper = () => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
+          
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
-            {sectionRoman}. {title} <span className="float-right">{markBreakdown}</span>
+            {sectionNumber}. {displayTitle} <span className="float-right">{markBreakdown}</span>
           </h3>
+
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
               <div className="flex justify-between items-start text-lg text-black font-local2 mb-2">
@@ -941,6 +951,21 @@ const Paper = () => {
                   {showIndividualMarks && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
                 </div>
               </div>
+              
+              {/* Render sub-questions, but skip the first one of the first question if we used it as title */}
+              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : []).map((subQ: any, subIdx: number) => {
+                if (isGeneric && idx === 0 && subIdx === 0) return null;
+                return (
+                  <div key={subIdx} className="mb-2 ml-6 flex justify-between items-start">
+                    <div className="flex-1 text-lg text-black font-local2 pr-4">
+                      <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
+                      <span>{renderMaybeMath(subQ.text || '')}</span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Image - NOW BELOW SUB-QUESTIONS */}
               {q.imageUrl && (
                 <div className="mb-3 ml-6">
                   <img
@@ -950,22 +975,22 @@ const Paper = () => {
                   />
                 </div>
               )}
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : []).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2 ml-6 flex justify-between items-start">
-                  <div className="flex-1 text-lg text-black font-local2 pr-4">
-                    <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
-                    <span>{renderMaybeMath(subQ.text || '')}</span>
-                  </div>
-                </div>
-              ))}
             </div>
           ))}
         </div>
       );
     }
 
-    // Choose from brackets
-    if (String(title).trim() === "Choose the correct answer from the brackets and fill in the blanks") {
+    // Case 1: "Fill in the blanks" (and variants)
+    const fillInBlanksTitles = [
+      "fill in the blanks",
+      "fill in the blanks with correct answers",
+      "fill in the blanks with 'a' or 'an'",
+      "choose the correct answer from the brackets and fill in the blanks"
+    ];
+    const isFillInBlanks = fillInBlanksTitles.some(t => cleanLowerTitle === t || cleanLowerTitle.startsWith(t));
+
+    if (isFillInBlanks) {
       return (
         <div key={`${section || ''}-${title}`} className="mb-6">
           {showSectionHeader && (
@@ -974,31 +999,42 @@ const Paper = () => {
             </div>
           )}
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
-            {sectionRoman}. {title} <span className="float-right">{markBreakdown}</span>
+            {sectionNumber}. {title} <span className="float-right">{markBreakdown}</span>
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2 flex justify-between items-start">
-                  <div className="flex-1 text-lg text-black font-local2 pr-4">
-                    <span className="mr-2">{getRomanSubIndex(idx)})</span>
-                    <span>{renderMaybeMath(subQ.text || q.question)}</span>
-                    {q.options && q.options.length > 0 && (
-                      <span className="ml-4 font-semibold">
-                        ({q.options.map((opt: string, i: number) => (
-                          <span key={i}>
-                            {renderMaybeMath(opt)}
-                            {i < q.options.length - 1 ? ', ' : ''}
-                          </span>
-                        ))})
-                      </span>
-                    )}
+              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => {
+                const text = subQ.text || q.question || "";
+                // If the text contains multiple numbered items (e.g. "1. ... 2. ..."), split them
+                const parts = text.split(/(?=\d+\.)/).filter(p => p.trim());
+
+                return (
+                  <div key={subIdx} className="mb-2 flex flex-col gap-2">
+                    {parts.map((part: string, pIdx: number) => (
+                      <div key={pIdx} className="flex justify-between items-start">
+                        <div className="flex-1 text-lg text-black font-local2 pr-4">
+                          {/* Only show the 1) prefix if we didn't just split a numbered list or if it's the first part of a single item */}
+                          {parts.length === 1 && <span className="mr-2">{getRomanSubIndex(idx)})</span>}
+                          <span>{renderMaybeMath(part.trim())}</span>
+                          {q.options && q.options.length > 0 && (
+                            <span className="ml-4 font-semibold">
+                              ({q.options.map((opt: string, i: number) => (
+                                <span key={i}>
+                                  {renderMaybeMath(opt)}
+                                  {i < q.options.length - 1 ? ', ' : ''}
+                                </span>
+                              ))})
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
+                          {showIndividualMarks && subIdx === 0 && pIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
-                    {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </div>
@@ -1015,7 +1051,7 @@ const Paper = () => {
             </div>
           )}
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
-            {sectionRoman}. {title} <span className="float-right">{markBreakdown}</span>
+            {sectionNumber}. {title} <span className="float-right">{markBreakdown}</span>
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
@@ -1057,7 +1093,7 @@ const Paper = () => {
             </div>
           )}
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
-            {sectionRoman}. {title} <span className="float-right">{markBreakdown}</span>
+            {sectionNumber}. {title} <span className="float-right">{markBreakdown}</span>
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-6 ml-5">
@@ -1105,7 +1141,7 @@ const Paper = () => {
             </div>
           )}
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
-            {sectionRoman}. {title} <span className="float-right">{markBreakdown}</span>
+            {sectionNumber}. {title} <span className="float-right">{markBreakdown}</span>
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
@@ -1145,7 +1181,7 @@ const Paper = () => {
             </div>
           )}
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
-            {sectionRoman}. {title} <span className="float-right">{markBreakdown}</span>
+            {sectionNumber}. {title} <span className="float-right">{markBreakdown}</span>
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
@@ -1186,7 +1222,7 @@ const Paper = () => {
           </div>
         )}
         <h3 className="text-lg font-semibold text-black mb-2 font-local2">
-          {sectionRoman}. {title} <span className="float-right">{markBreakdown}</span>
+          {sectionNumber}. {title} <span className="float-right">{markBreakdown}</span>
         </h3>
         {questions.map((q: any, idx: number) => (
           <div key={idx} className="mb-4 ml-8">

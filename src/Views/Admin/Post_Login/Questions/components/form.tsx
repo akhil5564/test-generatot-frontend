@@ -122,15 +122,15 @@ const QuestionForm = () => {
     if (marks === undefined || marks === null) return 0;
     const num = Number(marks);
     if (isNaN(num)) return 0;
-    
+
     // If it's already a whole number or exactly .5, return as is
     if (num % 1 === 0 || num % 1 === 0.5) {
       return num;
     }
-    
+
     const wholePart = Math.floor(num);
     const decimalPart = num % 1;
-    
+
     // If decimal part <= 0.5, round to wholePart + 0.5
     // If decimal part > 0.5, round to wholePart + 1.0
     if (decimalPart <= 0.5) {
@@ -270,15 +270,17 @@ const QuestionForm = () => {
           internalType === 'mcq' &&
           q?.questionTitle === 'Choose the correct answers';
 
-        // For picture questions (and multi-question MCQ), send separate question fields (question, question1, question2, etc.)
-        if ((internalType === 'image' || isMultiQuestionMcq) && Array.isArray(q?.subQuestions) && q.subQuestions.length > 0) {
+        // For all questions with subQuestions array
+        if (Array.isArray(q?.subQuestions) && q.subQuestions.length > 0) {
           const subTexts = q.subQuestions
             .map((sq: any) => (sq?.text || '').trim())
             .filter((t: string) => t.length > 0);
 
-          // Set question for first sub-question
+          // Set question for first sub-question (required by backend)
           if (subTexts.length > 0) {
             normalized.question = subTexts[0];
+          } else if (q?.question) {
+            normalized.question = q.question;
           }
 
           // Set question1, question2, etc. for remaining sub-questions
@@ -294,7 +296,7 @@ const QuestionForm = () => {
           // Backend requires question field; set a placeholder when not provided
           normalized.question = 'Tick the odd one in the following';
         } else {
-          // For other questions, set the question field normally
+          // Fallback for single question
           normalized.question = q?.question;
         }
 
@@ -612,7 +614,7 @@ const QuestionForm = () => {
       questionType,
       questionTitle: undefined,
       options: isMcq ? [{ text: '' }, { text: '' }] : undefined,
-      subQuestions: isImage ? [{ text: '' }] : undefined,
+      subQuestions: [{ text: '' }], // Always initialize with one sub-question
       correctAnswer: undefined
     };
     form.setFieldValue('questions', questions);
@@ -645,15 +647,9 @@ const QuestionForm = () => {
     }
 
     const nextSubQuestions =
-      isMcqMultiQuestion
-        ? (Array.isArray(current.subQuestions) && current.subQuestions.length > 0
-          ? current.subQuestions
-          : [{ text: '' }])
-        : (questionType === 'image'
-          ? (Array.isArray(current.subQuestions) && current.subQuestions.length > 0
-            ? current.subQuestions
-            : [{ text: '' }])
-          : undefined);
+      Array.isArray(current.subQuestions) && current.subQuestions.length > 0
+        ? current.subQuestions
+        : [{ text: '' }];
 
     questions[questionIndex] = {
       ...current,
@@ -824,126 +820,94 @@ const QuestionForm = () => {
 
     switch (effectiveType) {
       case 'mcq':
-        const isMultiQuestionMcq = questionTitle === 'Choose the correct answers';
         return (
           <div key={`mcq-${questionIndex}-${questionTypeChangeKey}`}>
-            {isMultiQuestionMcq && (
-              <Form.List name={[questionIndex, 'subQuestions']}>
-                {(subFields, { add, remove }) => (
-                  <>
-                    {subFields.map(({ key: subKey, name: subName, ...subRestField }) => (
-                      <Row key={subKey} gutter={16} align="middle" style={{ marginBottom: 16 }}>
-                        <Col span={22}>
-                          <Form.Item
-                            {...subRestField}
-                            name={[subName, 'text']}
-                            label={subName === 0 ? 'Questions' : undefined}
-                            rules={[{ required: true, message: 'Please enter question!' }]}
-                          >
-                            {isMathSubjectValue(isEdit ? selectedSubject : form.getFieldValue('subject')) ? (
-                              <MathInput
-                                rows={2}
-                                placeholder="Enter your question"
-                              />
-                            ) : (
-                              <TextArea
-                                rows={2}
-                                placeholder="Enter your question"
-                              />
-                            )}
-                          </Form.Item>
-                        </Col>
-                        <Col span={2}>
-                          {subFields.length > 1 && (
+            <Row gutter={16}>
+              <Col span={24}>
+                <Form.List name={[questionIndex, 'options']}>
+                  {(fields, { add, remove }) => (
+                    <>
+                      {fields.map(({ key, name, ...restField }) => (
+                        <Row key={key} gutter={16} align="middle">
+                          <Col span={20}>
+                            <Form.Item
+                              {...restField}
+                              name={[name, 'text']}
+                              rules={[{ required: true, message: 'Please enter option text!' }]}
+                            >
+                              {isMathSubjectValue(isEdit ? selectedSubject : form.getFieldValue('subject')) ? (
+                                <MathInput
+                                  rows={1}
+                                  placeholder={`Option ${name + 1}`}
+                                />
+                              ) : (
+                                <Input
+                                  placeholder={`Option ${name + 1}`}
+                                />
+                              )}
+                            </Form.Item>
+                          </Col>
+                          <Col span={4}>
                             <Button
                               type="text"
                               icon={<MinusCircleOutlined />}
-                              onClick={() => remove(subName)}
+                              onClick={() => {
+                                remove(name);
+                                // Clear correct answer if it references removed option
+                                const currentAnswers = form.getFieldValue(['questions', questionIndex, 'correctAnswer']) || [];
+                                const filteredAnswers = currentAnswers.filter((answer: number) => answer !== name);
+                                form.setFieldValue(['questions', questionIndex, 'correctAnswer'], filteredAnswers);
+                                // Force re-render
+                                setQuestionTypeChangeKey(prev => prev + 1);
+                              }}
                               danger
+                              disabled={fields.length <= 2}
                             />
-                          )}
-                        </Col>
-                      </Row>
-                    ))}
-                    {subFields.length < 4 && (
+                          </Col>
+                        </Row>
+                      ))}
                       <Form.Item>
                         <Button
                           type="dashed"
-                          onClick={() => add({ text: '' })}
+                          onClick={() => {
+                            add();
+                            // Force re-render after adding option
+                            setTimeout(() => {
+                              setQuestionTypeChangeKey(prev => prev + 1);
+                            }, 100);
+                          }}
                           icon={<PlusOutlined />}
+                          disabled={fields.length >= 6}
                           className="w-full"
                         >
-                          Add Question
+                          Add Option
                         </Button>
                       </Form.Item>
-                    )}
-                  </>
-                )}
-              </Form.List>
-            )}
-            <Form.List name={[questionIndex, 'options']}>
-              {(fields, { add, remove }) => (
-                <>
-                  {fields.map(({ key, name, ...restField }) => (
-                    <Row key={key} gutter={16} align="middle">
-                      <Col span={20}>
-                        <Form.Item
-                          {...restField}
-                          name={[name, 'text']}
-                          rules={[{ required: true, message: 'Please enter option text!' }]}
-                        >
-                          {isMathSubjectValue(isEdit ? selectedSubject : form.getFieldValue('subject')) ? (
-                            <MathInput
-                              rows={1}
-                              placeholder={`Option ${name + 1}`}
-                            />
-                          ) : (
-                            <Input
-                              placeholder={`Option ${name + 1}`}
-                            />
-                          )}
-                        </Form.Item>
-                      </Col>
-                      <Col span={4}>
-                        <Button
-                          type="text"
-                          icon={<MinusCircleOutlined />}
-                          onClick={() => {
-                            remove(name);
-                            // Clear correct answer if it references removed option
-                            const currentAnswers = form.getFieldValue(['questions', questionIndex, 'correctAnswer']) || [];
-                            const filteredAnswers = currentAnswers.filter((answer: number) => answer !== name);
-                            form.setFieldValue(['questions', questionIndex, 'correctAnswer'], filteredAnswers);
-                            // Force re-render
-                            setQuestionTypeChangeKey(prev => prev + 1);
-                          }}
-                          danger
-                          disabled={fields.length <= 2}
-                        />
-                      </Col>
-                    </Row>
-                  ))}
-                  <Form.Item>
-                    <Button
-                      type="dashed"
-                      onClick={() => {
-                        add();
-                        // Force re-render after adding option
-                        setTimeout(() => {
-                          setQuestionTypeChangeKey(prev => prev + 1);
-                        }, 100);
-                      }}
-                      icon={<PlusOutlined />}
-                      disabled={fields.length >= 6}
-                      className="w-full"
-                    >
-                      Add Option
-                    </Button>
-                  </Form.Item>
-                </>
-              )}
-            </Form.List>
+                    </>
+                  )}
+                </Form.List>
+              </Col>
+            </Row>
 
+            <Row gutter={16}>
+              <Col span={24}>
+                <Form.Item
+                  name={[questionIndex, 'correctAnswer']}
+                  label="Correct Answer(s)"
+                  rules={[{ required: true, message: 'Please select correct answer!' }]}
+                >
+                  <Select
+                    mode="multiple"
+                    placeholder="Select correct option(s)"
+                    style={{ width: "100%" }}
+                    options={(form.getFieldValue(['questions', questionIndex, 'options']) || []).map((opt: any, i: number) => ({
+                      label: `Option ${i + 1}: ${opt?.text || ''}`,
+                      value: i
+                    }))}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
           </div>
         );
 
@@ -1222,11 +1186,64 @@ const QuestionForm = () => {
 
                       {form.getFieldValue(['questions', name, 'questionType']) && (
                         <>
-                          {/* For Picture questions, allow multiple sub-questions under the same image */}
-                          {form.getFieldValue(['questions', name, 'questionType']) === 'image' ? (
+                          {/* Use Form.List for sub-questions for all types */}
+                          {!(form.getFieldValue(['questions', name, 'questionType']) === 'fillblank' &&
+                              form.getFieldValue(['questions', name, 'questionTitle']) === 'Tick the odd one in the following') ? (
                             <Form.List name={[name, 'subQuestions']}>
                               {(subFields, { add, remove }) => (
                                 <>
+                                  {/* Image upload is shown for Image type and Direct Questions with "Match the following" title */}
+                                  {(form.getFieldValue(['questions', name, 'questionType']) === 'image' ||
+                                    (form.getFieldValue(['questions', name, 'questionType']) === 'fillblank' &&
+                                      form.getFieldValue(['questions', name, 'questionTitle']) === 'Match the following')) && (
+                                      <Row gutter={16}>
+                                        <Col span={24}>
+                                          <Form.Item
+                                            {...restField}
+                                            name={[name, 'imageFileList']}
+                                            label="Upload Image"
+                                            rules={[{ required: true, message: 'Please upload image!' }]}
+                                          >
+                                            <Upload
+                                              listType="picture-card"
+                                              maxCount={1}
+                                              beforeUpload={(file) => {
+                                                handleImageSelect(file, name);
+                                                return false; // Prevent default upload
+                                              }}
+                                              defaultFileList={form.getFieldValue(['questions', name, 'imageFileList'])}
+                                              onChange={({ fileList }) => {
+                                                // This will be handled by the beforeUpload function
+                                              }}
+                                              onRemove={() => {
+                                                handleImageRemove(name);
+                                                return true;
+                                              }}
+                                              showUploadList={{
+                                                showUploadList: true,
+                                                showRemoveIcon: true,
+                                                showPreviewIcon: false,
+                                              }}
+                                            >
+                                              <div>
+                                                {uploadingImages[name] ? (
+                                                  <div>
+                                                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
+                                                    <div style={{ marginTop: 8 }}>Uploading...</div>
+                                                  </div>
+                                                ) : (
+                                                  <div>
+                                                    <UploadOutlined />
+                                                    <div style={{ marginTop: 8 }}>Upload</div>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </Upload>
+                                          </Form.Item>
+                                        </Col>
+                                      </Row>
+                                    )}
+
                                   {subFields.map(({ key: subKey, name: subName, ...subRestField }) => (
                                     <Row key={subKey} gutter={16} align="middle" style={{ marginBottom: 16 }}>
                                       <Col span={22}>
@@ -1262,7 +1279,15 @@ const QuestionForm = () => {
                                       </Col>
                                     </Row>
                                   ))}
-                                  {subFields.length < 4 && (
+
+                                  {/* Render type-specific fields (options, etc.) BEFORE the Add Question button */}
+                                  {renderQuestionTypeFields(
+                                    form.getFieldValue(['questions', name, 'questionType']),
+                                    name
+                                  )}
+
+                                  {/* Now the Add Question button is at the very bottom of the card section */}
+                                  {subFields.length < 10 && (
                                     <Form.Item>
                                       <Button
                                         type="dashed"
@@ -1277,94 +1302,16 @@ const QuestionForm = () => {
                                 </>
                               )}
                             </Form.List>
-                          ) : form.getFieldValue(['questions', name, 'questionType']) === 'mcq' &&
-                            form.getFieldValue(['questions', name, 'questionTitle']) === 'Choose the correct answers' ? null :
-                            (form.getFieldValue(['questions', name, 'questionType']) === 'fillblank' &&
-                              form.getFieldValue(['questions', name, 'questionTitle']) === 'Tick the odd one in the following') ? null : (
-                              <Row gutter={16}>
-                                <Col span={24}>
-                                  <Form.Item
-                                    required={false}
-                                    {...restField}
-                                    name={[name, 'question']}
-                                    label="Question"
-                                    rules={[{ required: true, message: 'Please enter question!' }]}
-                                  >
-                                    {isMathSubjectValue(isEdit ? selectedSubject : form.getFieldValue('subject')) ? (
-                                      <MathInput
-                                        rows={3}
-                                        placeholder="Enter your question"
-                                      />
-                                    ) : (
-                                      <TextArea
-                                        rows={3}
-                                        placeholder="Enter your question"
-                                      />
-                                    )}
-                                  </Form.Item>
-                                </Col>
-                              </Row>
-                            )}
+                          ) : (
+                            // For types that don't use sub-questions (like Odd One Out)
+                            renderQuestionTypeFields(
+                              form.getFieldValue(['questions', name, 'questionType']),
+                              name
+                            )
+                          )}
                         </>
                       )}
 
-                      {/* Image upload is shown for Image type and Direct Questions with "Match the following" title */}
-                      {(form.getFieldValue(['questions', name, 'questionType']) === 'image' ||
-                        (form.getFieldValue(['questions', name, 'questionType']) === 'fillblank' &&
-                          form.getFieldValue(['questions', name, 'questionTitle']) === 'Match the following')) && (
-                          <Row gutter={16}>
-                            <Col span={24}>
-                              <Form.Item
-                                {...restField}
-                                name={[name, 'imageFileList']}
-                                label="Upload Image"
-                                rules={[{ required: true, message: 'Please upload image!' }]}
-                              >
-                                <Upload
-                                  listType="picture-card"
-                                  maxCount={1}
-                                  beforeUpload={(file) => {
-                                    handleImageSelect(file, name);
-                                    return false; // Prevent default upload
-                                  }}
-                                  defaultFileList={form.getFieldValue(['questions', name, 'imageFileList'])}
-                                  onChange={({ fileList }) => {
-                                    // This will be handled by the beforeUpload function
-                                  }}
-                                  onRemove={() => {
-                                    handleImageRemove(name);
-                                    return true;
-                                  }}
-                                  showUploadList={{
-                                    showUploadList: true,
-                                    showRemoveIcon: true,
-                                    showPreviewIcon: false,
-                                  }}
-                                >
-                                  <div>
-                                    {uploadingImages[name] ? (
-                                      <div>
-                                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
-                                        <div style={{ marginTop: 8 }}>Uploading...</div>
-                                      </div>
-                                    ) : (
-                                      <div>
-                                        <UploadOutlined />
-                                        <div style={{ marginTop: 8 }}>Upload</div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </Upload>
-                              </Form.Item>
-                            </Col>
-                          </Row>
-                        )}
-
-                      {/* Render question type specific fields */}
-                      {renderQuestionTypeFields(
-                        form.getFieldValue(['questions', name, 'questionType']),
-                        name
-                      )}
                     </Card>
                   ))}
 
@@ -1465,20 +1412,20 @@ const QuestionForm = () => {
                 return;
               }
               const type = form.getFieldValue(['questions', currentQuestionForTitle!, 'questionType']);
-              
+
               setSavingTitle(true);
               try {
                 // Call backend to save new title
                 await POST(API.QUESTION_TITLES, { name: newTitle, type: type });
-                
+
                 // Refresh titles from backend
                 await fetchCustomTitles();
-                
+
                 // Select the newly added title
                 const questions = form.getFieldValue('questions');
                 questions[currentQuestionForTitle!].questionTitle = newTitle;
                 form.setFieldValue('questions', questions);
-                
+
                 message.success("Title added successfully!");
                 setIsTitleModalVisible(false);
                 setNewTitle("");
@@ -1525,11 +1472,11 @@ const QuestionForm = () => {
           ) : (
             <div className="space-y-2">
               {(customTitles[currentManageType] || []).map((title) => (
-                <div 
-                  key={title._id} 
-                  style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
+                <div
+                  key={title._id}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
                     alignItems: 'center',
                     padding: '8px 12px',
                     backgroundColor: '#f5f5f5',
