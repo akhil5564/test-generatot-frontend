@@ -15,6 +15,14 @@ import MathInput from "./MathInput";
 const { Option } = Select;
 const { TextArea } = Input;
 
+// Helper to detect Math/Maths subject (case/space insensitive)
+const isMathSubjectValue = (subject: string | undefined): boolean => {
+  if (!subject) return false;
+  const s = subject.toLowerCase().replace(/\s/g, '');
+  return s.includes('math') || s.includes('physics') || s.includes('chem') || s.includes('science') || s.includes('biology') || s.includes('evs');
+};
+
+
 const QuestionForm = () => {
   const [form] = Form.useForm();
   const { id: quizId } = useParams();
@@ -93,12 +101,7 @@ const QuestionForm = () => {
     return String(subject).trim().toLowerCase() === 'english';
   };
 
-  // Helper to detect Math/Maths subject (case/space insensitive)
-  const isMathSubjectValue = (subject?: string) => {
-    if (!subject) return false;
-    const subjectLower = String(subject).trim().toLowerCase();
-    return subjectLower === 'math' || subjectLower === 'maths' || subjectLower === 'mathematics';
-  };
+
 
   // Helper to unescape LaTeX backslashes from API response
   // API returns: "x^2\\ is\\ a" -> MathInput needs: "x^2\ is\ a"
@@ -184,8 +187,16 @@ const QuestionForm = () => {
 
 
 
-  // Force re-render state for question type changes
   const [questionTypeChangeKey, setQuestionTypeChangeKey] = React.useState(0);
+
+  // Robust helper to ensure we resolve strings from objects (used in both rehydration and submission)
+  const resolveToString = (val: any): string => {
+    if (val === undefined || val === null) return '';
+    if (typeof val === 'object') {
+      return String(val.text || val.question || val.qtitle || val.title || val.name || val.label || val.choices || val.value || val.content || '');
+    }
+    return String(val);
+  };
 
   // Mapping from internal question type keys to display labels
   const QUESTION_TYPE_LABELS: Record<string, string> = {
@@ -219,9 +230,9 @@ const QuestionForm = () => {
       "Letter Writing",
     ],
     image: [
-      "Identity the pictures",
+      "Identify the pictures",
       "Look at the pictures and answer the following",
-      "Describe the following picture.",
+      "Describe the following picture",
     ],
   };
 
@@ -252,7 +263,7 @@ const QuestionForm = () => {
       }
 
       // Normalize questions
-      const normalizedQuestions = questions.map((q: any) => {
+      const normalizedQuestions = questions.map((q: any, index: number) => {
         const internalType = q?.questionType;
         const normalized: any = {
           // Send the user-facing label in the API
@@ -273,14 +284,18 @@ const QuestionForm = () => {
         // For all questions with subQuestions array
         if (Array.isArray(q?.subQuestions) && q.subQuestions.length > 0) {
           const subTexts = q.subQuestions
-            .map((sq: any) => (sq?.text || '').trim())
+            .map((sq: any) => resolveToString(sq?.text).trim())
             .filter((t: string) => t.length > 0);
 
           // Set question for first sub-question (required by backend)
           if (subTexts.length > 0) {
             normalized.question = subTexts[0];
           } else if (q?.question) {
-            normalized.question = q.question;
+            normalized.question = resolveToString(q.question);
+          } else {
+            // For image questions, we allow a space as a placeholder to satisfy backend validation
+            // while remaining invisible in the UI.
+            normalized.question = internalType === 'image' ? ' ' : 'No question text provided';
           }
 
           // Set question1, question2, etc. for remaining sub-questions
@@ -288,7 +303,9 @@ const QuestionForm = () => {
             normalized[`question${i}`] = subTexts[i];
           }
 
-          normalized.subQuestions = q.subQuestions.map((sq: any) => ({ text: sq?.text || '' }));
+          normalized.subQuestions = q.subQuestions.map((sq: any) => ({ 
+            text: resolveToString(sq?.text).trim() || (internalType === 'image' ? ' ' : '') 
+          }));
         } else if (
           internalType === 'fillblank' &&
           q?.questionTitle === 'Tick the odd one in the following'
@@ -297,25 +314,52 @@ const QuestionForm = () => {
           normalized.question = 'Tick the odd one in the following';
         } else {
           // Fallback for single question
-          normalized.question = q?.question;
+          normalized.question = q?.question || (internalType === 'image' ? ' ' : 'No question text provided');
         }
 
-        if (
-          internalType === 'mcq' ||
+        const typeLower = String(normalized.questionType || '').toLowerCase();
+        const isMcq = internalType === 'mcq' || typeLower === 'multiple choice' || typeLower === 'mcq';
+        const needsOptions =
+          isMcq ||
           (internalType === 'fillblank' &&
-            q?.questionTitle === 'Tick the odd one in the following')
-        ) {
-          normalized.options = (q?.options || []).map((opt: any) => ({ text: opt?.text || '' }));
-          normalized.correctAnswer = q?.correctAnswer;
+            (q?.questionTitle === 'Tick the odd one in the following' ||
+              q?.questionTitle === 'Match the following'));
+
+        if (needsOptions) {
+          // With Form.List, q.options is guaranteed to be a standard array of objects
+          const rawOptions = q.options || [];
+          const reconstructedOptions = rawOptions
+            .map((o: any) => ({ 
+              text: resolveToString(o && typeof o === 'object' ? o.text : o).trim(),
+              isCorrect: false 
+            }))
+            .filter((o: any) => o.text.length > 0);
+
+          const correctIndices = Array.isArray(q.correctAnswer)
+            ? q.correctAnswer.map(v => Number(v))
+            : q.correctAnswer !== undefined ? [Number(q.correctAnswer)] : [];
+
+          // Map isCorrect into the options
+          normalized.options = reconstructedOptions.map((opt, idx) => ({
+            ...opt,
+            isCorrect: correctIndices.includes(idx)
+          }));
+
+          // Validation: MCQ must have at least 2 options
+          if (isMcq && normalized.options.length < 2) {
+            throw new Error(`Question ${index + 1}: Multiple Choice must have at least 2 non-empty options.`);
+          }
+
+          // Ensure options is at least an empty array
+          if (!normalized.options) normalized.options = [];
+
+          // Also keep correctAnswer for backward compatibility
+          normalized.correctAnswer = correctIndices;
         }
 
-        if (
-          (internalType === 'fillblank' &&
-            q?.questionTitle !== 'Tick the odd one in the following') ||
-          internalType === 'shortanswer' ||
-          internalType === 'essay'
-        ) {
-          normalized.correctAnswer = q?.correctAnswer;
+        // Final override for special cases
+        if (internalType === 'fillblank' && q?.questionTitle === 'Tick the odd one in the following') {
+          normalized.questionType = 'Multiple Choice';
         }
 
         const isImageLike =
@@ -341,6 +385,9 @@ const QuestionForm = () => {
       const resolvedBookName = selectedBookName || (booksOptions.find(b => b.value === values?.book)?.label) || values?.book;
 
       // Build payload (no examType here, backend doesn't use it)
+      console.log('Original Form Values:', values);
+      console.log('Normalized Questions:', normalizedQuestions);
+
       const payload = {
         className: isEdit ? selectedClass : values?.className,
         subject: isEdit ? selectedSubject : values?.subject,
@@ -382,9 +429,25 @@ const QuestionForm = () => {
       }
     } catch (error: any) {
       console.error("Failed to submit questions", error);
-      const description =
-        error?.response?.data?.message || error?.message || "Something went wrong";
-      message.error(`Failed to submit questions: ${description}`);
+      const errorData = error?.response?.data;
+      const description = errorData?.message || error?.message || "Something went wrong";
+
+      // If there are validation details, format them nicely
+      let detailedMessage = `Failed to submit questions: ${description}`;
+      if (errorData?.details && Array.isArray(errorData.details)) {
+        const details = errorData.details
+          .map((d: any) => typeof d === 'string' ? d : `${d.field}: ${d.message}`)
+          .join('\n');
+        detailedMessage += `\n\nDetails:\n${details}`;
+      } else if (errorData?.error) {
+        detailedMessage += `\nError: ${errorData.error}`;
+      }
+
+      message.error({
+        content: detailedMessage,
+        style: { whiteSpace: 'pre-wrap' },
+        duration: 5
+      });
     } finally {
       setSubmitting(false);
     }
@@ -613,7 +676,7 @@ const QuestionForm = () => {
       ...questions[questionIndex],
       questionType,
       questionTitle: undefined,
-      options: isMcq ? [{ text: '' }, { text: '' }] : undefined,
+      options: isMcq ? [{ text: '', id: 'init-0' }, { text: '', id: 'init-1' }] : undefined,
       subQuestions: [{ text: '' }], // Always initialize with one sub-question
       correctAnswer: undefined
     };
@@ -643,7 +706,7 @@ const QuestionForm = () => {
       nextOptions =
         Array.isArray(current.options) && current.options.length > 0
           ? current.options
-          : [{ text: '' }, { text: '' }];
+          : [{ text: '', id: 'init-0' }, { text: '', id: 'init-1' }];
     }
 
     const nextSubQuestions =
@@ -690,13 +753,19 @@ const QuestionForm = () => {
 
                 // Map qtitle (API field) back to questionTitle (form field)
                 const questionTitle = q.qtitle || q.questionTitle;
+                const isMath = isMathSubjectValue(isEdit ? selectedSubject : questionData.subject);
+                const isOddOneOutFillBlank =
+                  internalType === 'fillblank' &&
+                  questionTitle === 'Tick the odd one in the following';
 
+                const rawQuestion = q.question;
+                const resolvedQuestion = typeof rawQuestion === 'object' ? (rawQuestion.text || rawQuestion.question || rawQuestion.title || '') : (rawQuestion || '');
                 const mappedQuestion: any = {
                   questionType: internalType,
                   questionTitle: questionTitle,
-                  question: isMathSubjectValue(isEdit ? selectedSubject : questionData.subject)
-                    ? unescapeLatex(q.question)
-                    : q.question,
+                  question: isMath
+                    ? unescapeLatex(resolvedQuestion)
+                    : resolvedQuestion,
                   marks: q.marks,
                 };
 
@@ -705,10 +774,6 @@ const QuestionForm = () => {
                   mappedQuestion.section = q.section;
                 }
 
-                const isOddOneOutFillBlank =
-                  internalType === 'fillblank' &&
-                  questionTitle === 'Tick the odd one in the following';
-
                 const isImageLike =
                   internalType === 'image' ||
                   (internalType === 'fillblank' &&
@@ -716,10 +781,14 @@ const QuestionForm = () => {
 
                 // Handle MCQ-like options (including odd-one-out direct questions)
                 if ((internalType === 'mcq' || isOddOneOutFillBlank) && q.options) {
-                  const isMath = isMathSubjectValue(isEdit ? selectedSubject : questionData.subject);
-                  mappedQuestion.options = q.options.map((opt: any) => ({
-                    text: isMath && opt.text ? unescapeLatex(opt.text) : (opt.text || opt)
-                  }));
+                  mappedQuestion.options = q.options.map((opt: any, idx: number) => {
+                    const resolvedOpt = resolveToString(opt);
+                    const text = isMath ? unescapeLatex(resolvedOpt) : resolvedOpt;
+                    return {
+                      text,
+                      id: `init-${idx}`
+                    };
+                  });
                   mappedQuestion.correctAnswer = q.correctAnswer;
                 }
 
@@ -742,37 +811,36 @@ const QuestionForm = () => {
                   }];
                 }
 
-                // For picture questions, rehydrate subQuestions if present,
-                // or split the main question text by lines as a fallback.
-                const isMath = isMathSubjectValue(isEdit ? selectedSubject : questionData.subject);
-                if (internalType === 'image') {
+                // Rehydrate subQuestions for all types that use them
+                const usesSubQuestions = !isOddOneOutFillBlank;
+
+                if (usesSubQuestions) {
                   if (Array.isArray(q.subQuestions) && q.subQuestions.length > 0) {
-                    mappedQuestion.subQuestions = q.subQuestions.map((sq: any) => ({
-                      text: isMath ? unescapeLatex(sq?.text) : (sq?.text || '')
-                    }));
+                    mappedQuestion.subQuestions = q.subQuestions.map((sq: any) => {
+                      const rawSq = typeof sq === 'object' ? (sq.text || sq.question || sq.title || sq.label || sq) : sq;
+                      const resolvedSq = typeof rawSq === 'object' ? '' : String(rawSq || '');
+                      return {
+                        text: isMath ? unescapeLatex(resolvedSq) : resolvedSq
+                      };
+                    });
                   } else if (typeof q.question === 'string' && q.question.trim().length > 0) {
-                    const parts = q.question.split('\n').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
-                    if (parts.length > 0) {
-                      mappedQuestion.subQuestions = parts.map((t: string) => ({
-                        text: isMath ? unescapeLatex(t) : t
-                      }));
+                    // Fallback: populate subQuestions from the individual question fields
+                    mappedQuestion.subQuestions = [{
+                      text: isMath ? unescapeLatex(q.question) : q.question
+                    }];
+
+                    // Also check for question1, question2, etc.
+                    for (let i = 1; i <= 5; i++) {
+                      const extraField = q[`question${i}`];
+                      if (extraField && extraField.trim()) {
+                        mappedQuestion.subQuestions.push({
+                          text: isMath ? unescapeLatex(extraField) : extraField
+                        });
+                      }
                     }
-                  }
-                } else if (
-                  internalType === 'mcq' &&
-                  questionTitle === 'Choose the correct answers'
-                ) {
-                  if (Array.isArray(q.subQuestions) && q.subQuestions.length > 0) {
-                    mappedQuestion.subQuestions = q.subQuestions.map((sq: any) => ({
-                      text: isMath ? unescapeLatex(sq?.text) : (sq?.text || '')
-                    }));
-                  } else if (typeof q.question === 'string' && q.question.trim().length > 0) {
-                    const parts = q.question.split('\n').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
-                    if (parts.length > 0) {
-                      mappedQuestion.subQuestions = parts.map((t: string) => ({
-                        text: isMath ? unescapeLatex(t) : t
-                      }));
-                    }
+                  } else {
+                    // Always have at least one empty sub-question for the UI
+                    mappedQuestion.subQuestions = [{ text: '' }];
                   }
                 }
 
@@ -807,128 +875,6 @@ const QuestionForm = () => {
     loadQuestionData();
   }, [form, isEdit, quizId]);
 
-  // Render question type specific fields
-  const renderQuestionTypeFields = (questionType: string, questionIndex: number) => {
-    if (!questionType) return null;
-
-    const questionTitle = form.getFieldValue(['questions', questionIndex, 'questionTitle']);
-    const isOddOneOutFillBlank =
-      questionType === 'fillblank' &&
-      questionTitle === 'Tick the odd one in the following';
-
-    const effectiveType = isOddOneOutFillBlank ? 'mcq' : questionType;
-
-    switch (effectiveType) {
-      case 'mcq':
-        return (
-          <div key={`mcq-${questionIndex}-${questionTypeChangeKey}`}>
-            <Row gutter={16}>
-              <Col span={24}>
-                <Form.List name={[questionIndex, 'options']}>
-                  {(fields, { add, remove }) => (
-                    <>
-                      {fields.map(({ key, name, ...restField }) => (
-                        <Row key={key} gutter={16} align="middle">
-                          <Col span={20}>
-                            <Form.Item
-                              {...restField}
-                              name={[name, 'text']}
-                              rules={[{ required: true, message: 'Please enter option text!' }]}
-                            >
-                              {isMathSubjectValue(isEdit ? selectedSubject : form.getFieldValue('subject')) ? (
-                                <MathInput
-                                  rows={1}
-                                  placeholder={`Option ${name + 1}`}
-                                />
-                              ) : (
-                                <Input
-                                  placeholder={`Option ${name + 1}`}
-                                />
-                              )}
-                            </Form.Item>
-                          </Col>
-                          <Col span={4}>
-                            <Button
-                              type="text"
-                              icon={<MinusCircleOutlined />}
-                              onClick={() => {
-                                remove(name);
-                                // Clear correct answer if it references removed option
-                                const currentAnswers = form.getFieldValue(['questions', questionIndex, 'correctAnswer']) || [];
-                                const filteredAnswers = currentAnswers.filter((answer: number) => answer !== name);
-                                form.setFieldValue(['questions', questionIndex, 'correctAnswer'], filteredAnswers);
-                                // Force re-render
-                                setQuestionTypeChangeKey(prev => prev + 1);
-                              }}
-                              danger
-                              disabled={fields.length <= 2}
-                            />
-                          </Col>
-                        </Row>
-                      ))}
-                      <Form.Item>
-                        <Button
-                          type="dashed"
-                          onClick={() => {
-                            add();
-                            // Force re-render after adding option
-                            setTimeout(() => {
-                              setQuestionTypeChangeKey(prev => prev + 1);
-                            }, 100);
-                          }}
-                          icon={<PlusOutlined />}
-                          disabled={fields.length >= 6}
-                          className="w-full"
-                        >
-                          Add Option
-                        </Button>
-                      </Form.Item>
-                    </>
-                  )}
-                </Form.List>
-              </Col>
-            </Row>
-
-            <Row gutter={16}>
-              <Col span={24}>
-                <Form.Item
-                  name={[questionIndex, 'correctAnswer']}
-                  label="Correct Answer(s)"
-                  rules={[{ required: true, message: 'Please select correct answer!' }]}
-                >
-                  <Select
-                    mode="multiple"
-                    placeholder="Select correct option(s)"
-                    style={{ width: "100%" }}
-                    options={(form.getFieldValue(['questions', questionIndex, 'options']) || []).map((opt: any, i: number) => ({
-                      label: `Option ${i + 1}: ${opt?.text || ''}`,
-                      value: i
-                    }))}
-                  />
-                </Form.Item>
-              </Col>
-            </Row>
-          </div>
-        );
-
-      case 'fillblank':
-        return null;
-
-      case 'shortanswer':
-        return null;
-
-      case 'essay':
-        return null;
-
-      case 'image':
-        // Extra per-picture-question fields are handled inline in the card
-        // (sub-questions list rendered instead of single question textarea)
-        return null;
-
-      default:
-        return null;
-    }
-  };
 
   return (
     <>
@@ -943,7 +889,11 @@ const QuestionForm = () => {
             className="font-local2"
             initialValues={{
               status: true,
-              questions: [{}]
+              questions: [{
+                subQuestions: [{ text: '' }],
+                options: [{ text: '', id: 'init-0' }, { text: '', id: 'init-1' }],
+                marks: 1
+              }]
             }}
           >
             {/* Basic Information - Only show when creating new question */}
@@ -1048,16 +998,28 @@ const QuestionForm = () => {
 
             {/* Dynamic Questions */}
             <Form.List name="questions">
-              {(fields) => (
+              {(fields, { add, remove }) => (
                 <>
-                  {fields.map(({ key, name, ...restField }) => (
+                  {fields.map(({ key: fieldKey, name, ...restField }) => (
                     <Card
-                      key={key}
+                      key={fieldKey}
                       size="small"
                       className="mb-4"
                       style={{ backgroundColor: '#f8f9fa' }}
-
+                      extra={
+                        fields.length > 1 && (
+                          <Button 
+                            type="text" 
+                            danger 
+                            icon={<MinusCircleOutlined />} 
+                            onClick={() => remove(name)}
+                          >
+                            Remove Question
+                          </Button>
+                        )
+                      }
                     >
+                  
                       <Row gutter={16}>
                         {/* Show Section selector first when subject is English */}
                         {isEnglishSubjectValue(isEdit ? selectedSubject : form.getFieldValue('subject')) && (
@@ -1186,20 +1148,19 @@ const QuestionForm = () => {
 
                       {form.getFieldValue(['questions', name, 'questionType']) && (
                         <>
-                          {/* Use Form.List for sub-questions for all types */}
+                          {/* 1. Questions Block: Show subQuestions list except for Odd-one-out */}
                           {!(form.getFieldValue(['questions', name, 'questionType']) === 'fillblank' &&
-                              form.getFieldValue(['questions', name, 'questionTitle']) === 'Tick the odd one in the following') ? (
+                            form.getFieldValue(['questions', name, 'questionTitle']) === 'Tick the odd one in the following') && (
                             <Form.List name={[name, 'subQuestions']}>
-                              {(subFields, { add, remove }) => (
+                              {(subFields, { add: addSub, remove: removeSub }) => (
                                 <>
-                                  {/* Image upload is shown for Image type and Direct Questions with "Match the following" title */}
+                                  {/* Image upload for specific types */}
                                   {(form.getFieldValue(['questions', name, 'questionType']) === 'image' ||
                                     (form.getFieldValue(['questions', name, 'questionType']) === 'fillblank' &&
                                       form.getFieldValue(['questions', name, 'questionTitle']) === 'Match the following')) && (
                                       <Row gutter={16}>
                                         <Col span={24}>
                                           <Form.Item
-                                            {...restField}
                                             name={[name, 'imageFileList']}
                                             label="Upload Image"
                                             rules={[{ required: true, message: 'Please upload image!' }]}
@@ -1209,12 +1170,9 @@ const QuestionForm = () => {
                                               maxCount={1}
                                               beforeUpload={(file) => {
                                                 handleImageSelect(file, name);
-                                                return false; // Prevent default upload
+                                                return false; 
                                               }}
                                               defaultFileList={form.getFieldValue(['questions', name, 'imageFileList'])}
-                                              onChange={({ fileList }) => {
-                                                // This will be handled by the beforeUpload function
-                                              }}
                                               onRemove={() => {
                                                 handleImageRemove(name);
                                                 return true;
@@ -1227,14 +1185,14 @@ const QuestionForm = () => {
                                             >
                                               <div>
                                                 {uploadingImages[name] ? (
-                                                  <div>
-                                                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
-                                                    <div style={{ marginTop: 8 }}>Uploading...</div>
+                                                  <div className="flex flex-col items-center">
+                                                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                                                    <div className="mt-2 text-xs">Uploading...</div>
                                                   </div>
                                                 ) : (
-                                                  <div>
+                                                  <div className="flex flex-col items-center">
                                                     <UploadOutlined />
-                                                    <div style={{ marginTop: 8 }}>Upload</div>
+                                                    <div className="mt-2 text-xs">Upload</div>
                                                   </div>
                                                 )}
                                               </div>
@@ -1244,26 +1202,23 @@ const QuestionForm = () => {
                                       </Row>
                                     )}
 
-                                  {subFields.map(({ key: subKey, name: subName, ...subRestField }) => (
+                                  {subFields.map(({ key: subKey, name: subName }) => (
                                     <Row key={subKey} gutter={16} align="middle" style={{ marginBottom: 16 }}>
                                       <Col span={22}>
                                         <Form.Item
-                                          required={false}
-                                          {...subRestField}
                                           name={[subName, 'text']}
                                           label={subName === 0 ? 'Questions' : undefined}
-                                          rules={[{ required: true, message: 'Please enter question!' }]}
+                                          rules={[
+                                            {
+                                              required: form.getFieldValue(['questions', name, 'questionType']) !== 'image',
+                                              message: 'Please enter question!'
+                                            }
+                                          ]}
                                         >
                                           {isMathSubjectValue(isEdit ? selectedSubject : form.getFieldValue('subject')) ? (
-                                            <MathInput
-                                              rows={2}
-                                              placeholder="Enter your question"
-                                            />
+                                            <MathInput rows={2} placeholder="Enter your question" />
                                           ) : (
-                                            <TextArea
-                                              rows={2}
-                                              placeholder="Enter your question"
-                                            />
+                                            <TextArea rows={2} placeholder="Enter your question" />
                                           )}
                                         </Form.Item>
                                       </Col>
@@ -1272,43 +1227,141 @@ const QuestionForm = () => {
                                           <Button
                                             type="text"
                                             icon={<MinusCircleOutlined />}
-                                            onClick={() => remove(subName)}
+                                            onClick={() => removeSub(subName)}
                                             danger
                                           />
                                         )}
                                       </Col>
                                     </Row>
                                   ))}
-
-                                  {/* Render type-specific fields (options, etc.) BEFORE the Add Question button */}
-                                  {renderQuestionTypeFields(
-                                    form.getFieldValue(['questions', name, 'questionType']),
-                                    name
-                                  )}
-
-                                  {/* Now the Add Question button is at the very bottom of the card section */}
-                                  {subFields.length < 10 && (
-                                    <Form.Item>
-                                      <Button
-                                        type="dashed"
-                                        onClick={() => add({ text: '' })}
-                                        icon={<PlusOutlined />}
-                                        className="w-full"
-                                      >
-                                        Add Question
-                                      </Button>
-                                    </Form.Item>
-                                  )}
+                                  
+                                  {/* Sub-question adding removed as per request to have separate parent questions */}
                                 </>
                               )}
                             </Form.List>
-                          ) : (
-                            // For types that don't use sub-questions (like Odd One Out)
-                            renderQuestionTypeFields(
-                              form.getFieldValue(['questions', name, 'questionType']),
-                              name
-                            )
                           )}
+
+                          {/* 2. Options Block: Show for any MCQ-like type */}
+                          <Form.Item
+                            noStyle
+                            shouldUpdate={(prev, curr) => {
+                              const pType = prev.questions?.[name]?.questionType;
+                              const cType = curr.questions?.[name]?.questionType;
+                              const pTitle = prev.questions?.[name]?.questionTitle;
+                              const cTitle = curr.questions?.[name]?.questionTitle;
+                              const pOpts = prev.questions?.[name]?.options?.length;
+                              const cOpts = curr.questions?.[name]?.options?.length;
+                              return pType !== cType || pTitle !== cTitle || pOpts !== cOpts;
+                            }}
+                          >
+                            {() => {
+                              const qType = form.getFieldValue(['questions', name, 'questionType']);
+                              const qTitle = form.getFieldValue(['questions', name, 'questionTitle']);
+                              const isOddOneOut = qType === 'fillblank' && qTitle === 'Tick the odd one in the following';
+                              const effectiveType = isOddOneOut ? 'mcq' : qType;
+
+                              if (effectiveType === 'mcq') {
+                                const subject = isEdit ? selectedSubject : form.getFieldValue('subject');
+                                const isMath = isMathSubjectValue(subject);
+                                const rawOptions = form.getFieldValue(['questions', name, 'options']) || [];
+                                const options = Array.isArray(rawOptions) ? rawOptions : Object.values(rawOptions);
+
+                                return (
+                                  <div className="mt-4 border-t pt-4">
+                                    <Form.List name={[name, 'options']}>
+                                      {(optFields, { add: addOpt, remove: removeOpt }) => (
+                                        <Form.Item label="Options" required>
+                                          {optFields.map(({ key: optKey, name: optName }) => (
+                                            <Row key={optKey} gutter={8} align="middle" style={{ marginBottom: 8 }}>
+                                              <Col flex="auto">
+                                                <Form.Item
+                                                  name={[optName, 'text']}
+                                                  noStyle
+                                                  rules={[{ required: true, message: 'Please enter option text!' }]}
+                                                >
+                                                  {isMath ? (
+                                                    <MathInput rows={1} placeholder={`Option ${optName + 1}`} />
+                                                  ) : (
+                                                    <Input placeholder={`Option ${optName + 1}`} />
+                                                  )}
+                                                </Form.Item>
+                                              </Col>
+                                              <Col>
+                                                <Button
+                                                  type="text"
+                                                  danger
+                                                  icon={<MinusCircleOutlined />}
+                                                  onClick={() => removeOpt(optName)}
+                                                  disabled={optFields.length <= 2}
+                                                />
+                                              </Col>
+                                            </Row>
+                                          ))}
+                                          <Button
+                                            type="dashed"
+                                            onClick={() => addOpt({ text: '', id: Date.now() + Math.random() })}
+                                            block
+                                            icon={<PlusOutlined />}
+                                            style={{ marginTop: 8 }}
+                                          >
+                                            Add Option
+                                          </Button>
+                                        </Form.Item>
+                                      )}
+                                    </Form.List>
+
+                                    <Form.Item
+                                      name={[name, 'correctAnswer']}
+                                      label="Correct Answer(s)"
+                                      rules={[{ required: true, message: 'Please select correct answer!' }]}
+                                    >
+                                      <Select
+                                        mode="multiple"
+                                        placeholder="Select correct option(s)"
+                                        style={{ width: "100%" }}
+                                        options={options.map((opt: any, i: number) => {
+                                          const currentText = resolveToString(opt?.text) || '';
+                                          return {
+                                            label: `Option ${i + 1}: ${currentText}`,
+                                            value: i
+                                          };
+                                        })}
+                                      />
+                                    </Form.Item>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            }}
+                          </Form.Item>
+
+                          <Button
+                            type="dashed"
+                            onClick={() => {
+                              const currentQ = form.getFieldValue(['questions', name]);
+                              add({
+                                questionType: currentQ?.questionType,
+                                questionTitle: currentQ?.questionTitle,
+                                section: currentQ?.section,
+                                subQuestions: [{ text: '' }],
+                                options: currentQ?.questionType === 'mcq' || (currentQ?.questionType === 'fillblank' && currentQ?.questionTitle === 'Tick the odd one in the following')
+                                  ? [{ text: '', id: Date.now() }, { text: '', id: Date.now() + 1 }]
+                                  : undefined,
+                                marks: currentQ?.marks || 1
+                              });
+                            }}
+                            icon={<PlusOutlined />}
+                            className="w-full mt-4"
+                            style={{ 
+                              color: '#007575', 
+                              borderColor: '#007575',
+                              height: '45px',
+                              fontSize: '16px',
+                              fontWeight: '500'
+                            }}
+                          >
+                            Add Another Question
+                          </Button>
                         </>
                       )}
 

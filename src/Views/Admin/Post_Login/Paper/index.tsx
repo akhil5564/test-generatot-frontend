@@ -13,10 +13,10 @@ import { InlineMath } from 'react-katex';
 import 'katex/dist/katex.min.css';
 
 // Helper to detect Math/Maths subject (case/space insensitive)
-const isMathSubjectValue = (subject?: string): boolean => {
+const isMathSubjectValue = (subject: string | undefined): boolean => {
   if (!subject) return false;
-  const subjectLower = String(subject).trim().toLowerCase();
-  return subjectLower === 'math' || subjectLower === 'maths' || subjectLower === 'mathematics';
+  const s = subject.toLowerCase().replace(/\s/g, '');
+  return s.includes('math') || s.includes('physics') || s.includes('chem') || s.includes('science') || s.includes('biology') || s.includes('evs');
 };
 
 // Helper to unescape LaTeX backslashes from API response
@@ -86,7 +86,7 @@ const answerFollowingSubtypeOptions = [
 ];
 
 const pictureSubtypeOptions = [
-  { label: 'Identity the pictures', value: 'identify_pictures' },
+  { label: 'Identify the pictures', value: 'identify_pictures' },
   { label: 'Look at the pictures and answer the following', value: 'look_and_answer' },
   { label: 'Describe the following picture', value: 'describe_picture' }
 ];
@@ -453,12 +453,18 @@ const Paper = () => {
       // Get book name from selected book ID
       const selectedBookName = booksOptions.find(book => book.value === formValues.book)?.label || formValues.book;
 
-      // Get chapter names from selected chapter IDs
-      const selectedChapterNames = Array.isArray(formValues.chapters)
-        ? formValues.chapters.map(chapterId =>
-          chaptersOptions.find(chapter => chapter.value === chapterId)?.label || chapterId
-        ).join(',')
-        : formValues.chapters;
+      // Collect both IDs and Names for robust filtering in backend
+      const chapterIds = Array.isArray(formValues.chapters) ? formValues.chapters : [formValues.chapters];
+      const chaptersToFilter: string[] = [];
+      chapterIds.forEach(id => {
+        if (!id) return;
+        chaptersToFilter.push(id);
+        const label = chaptersOptions.find(chapter => chapter.value === id)?.label;
+        if (label && label !== id) {
+          chaptersToFilter.push(label);
+        }
+      });
+      const selectedChapterQueryValue = chaptersToFilter.join(',');
 
       // Priority: explicit override -> current modalFilterTypes -> selectedTypes
       const filterTypes = (Array.isArray(overrideFilterTypes) && overrideFilterTypes.length > 0)
@@ -518,7 +524,7 @@ const Paper = () => {
         className: formValues.class,
         subject: formValues.subject,
         book: selectedBookName,
-        chapters: selectedChapterNames,
+        chapters: chaptersToFilter.join(','),
         ...(questionTitleLabels.length > 0 ? { qtitle: questionTitleLabels.join(',') } : {}),
         ...(english && selectedSections.length > 0 ? { section: selectedSections.join('&') } : {})
       };
@@ -529,7 +535,7 @@ const Paper = () => {
       // Map API response types back to new question types
       const mapAPIToType = (apiType: string): QuestionType => {
         const normalizedType = apiType?.toLowerCase().trim() || '';
-        if (normalizedType === 'image' || normalizedType === 'picture questions') return 'picture';
+        if (normalizedType === 'image' || normalizedType.includes('picture')) return 'picture';
         if (normalizedType === 'mcq' || normalizedType === 'multiple choice') return 'multiplechoice';
         if (normalizedType === 'shortanswer' || normalizedType === 'short answer' || normalizedType === 'direct questions') return 'direct';
         if (normalizedType === 'essay' || normalizedType === 'longanswer' || normalizedType === 'long answer' || normalizedType === 'answer the following questions') return 'answerthefollowing';
@@ -539,13 +545,15 @@ const Paper = () => {
 
       // Helper function to extract sub-questions from API response
       const extractSubQuestions = (q: any): string[] => {
+        if (!q) return [];
         const subQuestions: string[] = [];
 
         // First, try to use subQuestions array if it exists and has items
         if (Array.isArray(q.subQuestions) && q.subQuestions.length > 0) {
           q.subQuestions.forEach((sq: any) => {
-            if (sq?.text && sq.text.trim()) {
-              subQuestions.push(sq.text.trim());
+            const val = typeof sq === 'object' ? (sq.text || sq.question || sq.title || '') : sq;
+            if (val && String(val).trim()) {
+              subQuestions.push(String(val).trim());
             }
           });
           // If we got sub-questions from array, return them
@@ -555,16 +563,22 @@ const Paper = () => {
         }
 
         // If no subQuestions array or it's empty, collect from question, question1, question2, etc.
-        // Start with question field
-        if (q.question && q.question.trim()) {
-          subQuestions.push(q.question.trim());
+        const rawQ = q.question;
+        if (rawQ) {
+          const qText = typeof rawQ === 'object' ? (rawQ.text || rawQ.question || rawQ.title || '') : String(rawQ || '');
+          if (qText && qText.trim()) {
+            subQuestions.push(qText.trim());
+          }
         }
 
         // Add question1, question2, etc. if they exist and are not null
         for (let i = 1; i <= 5; i++) {
-          const questionField = q[`question${i}`];
-          if (questionField && questionField.trim()) {
-            subQuestions.push(questionField.trim());
+          const rawExtra = q[`question${i}`];
+          if (rawExtra) {
+            const extraText = typeof rawExtra === 'object' ? (rawExtra.text || rawExtra.question || rawExtra.title || '') : String(rawExtra || '');
+            if (extraText && extraText.trim()) {
+              subQuestions.push(extraText.trim());
+            }
           }
         }
 
@@ -577,7 +591,7 @@ const Paper = () => {
           return {
             id: q.questionId || q.id || q._id,
             type: mapAPIToType(q.questionType || q.type || 'direct'),
-            text: q.question || q.text || q.title,
+            text: typeof q.question === 'object' ? (q.question?.text || q.question?.question || q.question?.qtitle || q.question?.title || q.question?.name || q.question?.label || q.question?.choices || q.question?.value || q.question?.content || '') : (q.question || q.text || q.title || ''),
             imageUrl: q.imageUrl || q.image,
             defaultMarks: q.marks || q.defaultMarks || 1,
             options: q.options || q.choices,
@@ -733,17 +747,42 @@ const Paper = () => {
     return String(num);
   };
 
-  const renderMaybeMath = (text?: string) => {
-    if (!text) return null;
+  const renderMaybeMath = (text?: any) => {
+    if (text === undefined || text === null) return null;
+
+    let resolvedText = '';
+    if (typeof text === 'object') {
+      resolvedText = text.text || text.question || text.qtitle || text.title || text.name || text.label || text.choices || text.value || text.content || '';
+      // If it's an object with no recognized text fields, don't let it be [object Object]
+      if (!resolvedText) {
+        try {
+          if (!text.$$typeof) {
+            resolvedText = JSON.stringify(text);
+          }
+        } catch (e) {
+          resolvedText = 'Object';
+        }
+      }
+    } else {
+      resolvedText = String(text || '');
+    }
+
+    // Filter out literal "[object Object]" strings that might be in the DB
+    if (resolvedText === '[object Object]') {
+      resolvedText = '[Corrupted Data - Please Re-save]';
+    }
+
+    if (!resolvedText) return null;
+
     if (isMathSubjectValue(formValues?.subject)) {
       return (
         <InlineMath
-          math={`\\mathrm{${unescapeLatex(String(text))}}`}
-          renderError={(error) => <span>{text}</span>}
+          math={`\\mathrm{${unescapeLatex(String(resolvedText))}}`}
+          renderError={(error) => <span>{String(resolvedText)}</span>}
         />
       );
     }
-    return text;
+    return String(resolvedText);
   };
 
   const getRomanSubIndex = (index: number) => {
@@ -861,7 +900,7 @@ const Paper = () => {
       "Paragraph Writing",
       "Essay Writing",
       "Letter Writing",
-      "Identity the pictures",
+      "Identify the pictures",
       "Look at the pictures and answer the following",
       "Describe the following picture"
     ].map(t => t.toLowerCase().trim());
@@ -914,19 +953,27 @@ const Paper = () => {
       "describe the following picture",
       "look at the pictures and answer the following",
       "identify the pictures",
-      "identity the pictures",
     ];
     const cleanLowerTitle = String(title || '').trim().toLowerCase().replace(/\.$/, '');
 
     // Picture questions
-    if (pictureTitles.some((t) => cleanLowerTitle === t || cleanLowerTitle.startsWith(t))) {
+    const isPictureSection = pictureTitles.some((t) => cleanLowerTitle === t || cleanLowerTitle.startsWith(t)) ||
+                             questions.some(q => q.type === 'picture' || q.questionType === 'Picture questions' || q.originalQuestionType === 'image' || q.imageUrl);
+    
+    // Initialize a running counter for questions in this section
+    let runningQuestionIndex = 0;
+
+    if (isPictureSection) {
       const firstQuestion = questions[0];
       const hasSubQuestions = firstQuestion?.subQuestions && firstQuestion.subQuestions.length > 0;
       let displayTitle = title;
 
-      const isGeneric = pictureTitles.some(t => cleanLowerTitle === t);
-      if (isGeneric && hasSubQuestions) {
-        displayTitle = firstQuestion.subQuestions[0].text;
+      const isGeneric = pictureTitles.some((t) => cleanLowerTitle === t);
+      const rawFirstSub = firstQuestion?.subQuestions?.[0]?.text || firstQuestion?.question || '';
+      const firstSubText = typeof rawFirstSub === 'object' ? (rawFirstSub.text || rawFirstSub.question || rawFirstSub.title || '') : String(rawFirstSub);
+      const isTitleOverridden = isGeneric && hasSubQuestions && firstSubText.trim().length > 0;
+      if (isTitleOverridden) {
+        displayTitle = firstSubText;
       }
 
       return (
@@ -936,47 +983,67 @@ const Paper = () => {
               <h2 className="text-xl font-bold text-black font-local2 underline">{sectionDisplay}</h2>
             </div>
           )}
-          
+
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
             {sectionNumber}. {displayTitle} <span className="float-right">{markBreakdown}</span>
           </h3>
 
-          {questions.map((q: any, idx: number) => (
-            <div key={idx} className="mb-4 ml-5">
-              <div className="flex justify-between items-start text-lg text-black font-local2 mb-2">
-                <div className="flex-1 pr-4">
-                  <span className="mr-2">{getRomanSubIndex(idx)})</span>
-                </div>
-                <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
-                  {showIndividualMarks && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
-                </div>
-              </div>
-              
-              {/* Render sub-questions, but skip the first one of the first question if we used it as title */}
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : []).map((subQ: any, subIdx: number) => {
-                if (isGeneric && idx === 0 && subIdx === 0) return null;
-                return (
-                  <div key={subIdx} className="mb-2 ml-6 flex justify-between items-start">
-                    <div className="flex-1 text-lg text-black font-local2 pr-4">
-                      <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
-                      <span>{renderMaybeMath(subQ.text || '')}</span>
+          {questions.map((q: any, idx: number) => {
+            const subQs = q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [];
+            const isFirstQuestionUsedAsTitle = isTitleOverridden && idx === 0;
+            const rawSubText = subQs[0]?.text || q.question || '';
+            const currentFirstSubText = typeof rawSubText === 'object' ? (rawSubText.text || rawSubText.question || rawSubText.title || '') : String(rawSubText);
+            const hasMultipleSubQuestions = subQs.length > 1;
+
+            // Flattening & Optional visibility logic (same as My Papers)
+            const showTextOnMainLine = subQs.length <= 1 && !isFirstQuestionUsedAsTitle && currentFirstSubText.trim().length > 0;
+            const shouldHideIndexLine = !showTextOnMainLine && subQs.length <= 1;
+
+            const qNum = runningQuestionIndex++;
+
+            return (
+              <div key={idx} className="mb-4 ml-5">
+                {!shouldHideIndexLine && (
+                  <div className="flex justify-between items-start text-lg text-black font-local2 mb-2">
+                    <div className="flex-1 pr-4">
+                      <span className="mr-2">{getRomanSubIndex(qNum)})</span>
+                      {showTextOnMainLine && (
+                        <span>{renderMaybeMath(currentFirstSubText)}</span>
+                      )}
+                    </div>
+                    <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
+                      {showIndividualMarks && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
                     </div>
                   </div>
-                );
-              })}
+                )}
 
-              {/* Image - NOW BELOW SUB-QUESTIONS */}
-              {q.imageUrl && (
-                <div className="mb-3 ml-6">
-                  <img
-                    src={q.imageUrl}
-                    alt="Question"
-                    className="max-w-full h-auto max-h-[200px] object-contain border border-gray-200 rounded"
-                  />
-                </div>
-              )}
-            </div>
-          ))}
+                {/* Render sub-questions if more than one, or if generic title skipped the first one */}
+                {(subQs).map((subQ: any, subIdx: number) => {
+                  if (isFirstQuestionUsedAsTitle && subIdx === 0) return null;
+                  if (!hasMultipleSubQuestions && !isFirstQuestionUsedAsTitle) return null; // already rendered
+                  return (
+                    <div key={subIdx} className="mb-2 ml-6 flex justify-between items-start">
+                      <div className="flex-1 text-lg text-black font-local2 pr-4">
+                        <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
+                        <span>{renderMaybeMath(subQ)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Image - NOW BELOW SUB-QUESTIONS */}
+                {q.imageUrl && (
+                  <div className="mb-3 ml-6">
+                    <img
+                      src={q.imageUrl}
+                      alt="Question"
+                      className="max-w-full h-auto max-h-[200px] object-contain border border-gray-200 rounded"
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       );
     }
@@ -1004,9 +1071,12 @@ const Paper = () => {
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
               {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => {
-                const text = subQ.text || q.question || "";
+                const rawText = subQ.text || q.question || "";
+                const text = typeof rawText === 'object' ? (rawText.text || rawText.question || rawText.title || '') : String(rawText);
                 // If the text contains multiple numbered items (e.g. "1. ... 2. ..."), split them
                 const parts = text.split(/(?=\d+\.)/).filter(p => p.trim());
+                
+                const qNum = runningQuestionIndex++;
 
                 return (
                   <div key={subIdx} className="mb-2 flex flex-col gap-2">
@@ -1014,7 +1084,7 @@ const Paper = () => {
                       <div key={pIdx} className="flex justify-between items-start">
                         <div className="flex-1 text-lg text-black font-local2 pr-4">
                           {/* Only show the 1) prefix if we didn't just split a numbered list or if it's the first part of a single item */}
-                          {parts.length === 1 && <span className="mr-2">{getRomanSubIndex(idx)})</span>}
+                          {parts.length === 1 && <span className="mr-2">{getRomanSubIndex(qNum)})</span>}
                           <span>{renderMaybeMath(part.trim())}</span>
                           {q.options && q.options.length > 0 && (
                             <span className="ml-4 font-semibold">
@@ -1055,28 +1125,31 @@ const Paper = () => {
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2 flex justify-between items-start">
-                  <div className="flex-1 text-lg text-black font-local2 pr-4">
-                    <span className="mr-2">{getRomanSubIndex(idx)})</span>
-                    <span>{renderMaybeMath(subQ.text || q.question)}</span>
-                    {q.options && q.options.length > 0 && (
-                      <div className="mt-2 ml-4">
-                        {q.options.map((opt: string, optIdx: number) => (
-                          <span key={optIdx} className="inline-flex items-center gap-2 mr-6">
-                            <span className="font-semibold">{String.fromCharCode(97 + optIdx)}.</span>
-                            <span className="text-2xl leading-none">☐</span>
-                            <span>{renderMaybeMath(opt)}</span>
-                          </span>
-                        ))}
-                      </div>
-                    )}
+              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => {
+                const qNum = runningQuestionIndex++;
+                return (
+                  <div key={subIdx} className="mb-2 flex justify-between items-start">
+                    <div className="flex-1 text-lg text-black font-local2 pr-4">
+                      <span className="mr-2">{getRomanSubIndex(qNum)})</span>
+                      <span>{renderMaybeMath(subQ)}</span>
+                      {q.options && q.options.length > 0 && (
+                        <div className="mt-2 ml-4">
+                          {q.options.map((opt: string, optIdx: number) => (
+                            <span key={optIdx} className="inline-flex items-center gap-2 mr-6">
+                              <span className="font-semibold">{String.fromCharCode(97 + optIdx)}.</span>
+                              <span className="text-2xl leading-none">☐</span>
+                              <span>{renderMaybeMath(opt)}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
+                      {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
+                    </div>
                   </div>
-                  <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
-                    {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </div>
@@ -1095,38 +1168,41 @@ const Paper = () => {
           <h3 className="text-lg font-semibold text-black mb-2 font-local2">
             {sectionNumber}. {title} <span className="float-right">{markBreakdown}</span>
           </h3>
-          {questions.map((q: any, idx: number) => (
-            <div key={idx} className="mb-6 ml-5">
-              <div className="mb-3 font-local2 text-black flex justify-between items-start">
-                <div className="flex-1">
-                  <span className="mr-2 font-semibold text-lg">{getRomanSubIndex(idx)})</span>
-                  <div className="inline-block p-3 bg-gray-50 border border-gray-200 rounded">
-                    <span className="font-semibold">
-                      ({q.options && q.options.map((opt: string, i: number) => (
-                        <span key={i}>
-                          {renderMaybeMath(opt)}
-                          {i < q.options.length - 1 ? ', ' : ''}
-                        </span>
-                      ))})
-                    </span>
+          {questions.map((q: any, idx: number) => {
+            const qNum = runningQuestionIndex++;
+            return (
+              <div key={idx} className="mb-6 ml-5">
+                <div className="mb-3 font-local2 text-black flex justify-between items-start">
+                  <div className="flex-1">
+                    <span className="mr-2 font-semibold text-lg">{getRomanSubIndex(qNum)})</span>
+                    <div className="inline-block p-3 bg-gray-50 border border-gray-200 rounded">
+                      <span className="font-semibold">
+                        ({q.options && q.options.map((opt: string, i: number) => (
+                          <span key={i}>
+                            {renderMaybeMath(opt)}
+                            {i < q.options.length - 1 ? ', ' : ''}
+                          </span>
+                        ))})
+                      </span>
+                    </div>
+                  </div>
+                  {/* Marks relative to the options block, not the first sub-question */}
+                  <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
+                    {showIndividualMarks && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
                   </div>
                 </div>
-                {/* Marks relative to the options block, not the first sub-question */}
-                <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
-                  {showIndividualMarks && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
-                </div>
+                {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
+                  <div key={subIdx} className="mb-2 ml-2 flex justify-between items-start">
+                    <div className="flex-1 text-lg text-black font-local2 pr-4">
+                      <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
+                      <span>{renderMaybeMath(subQ)}</span>
+                    </div>
+                    {/* Marks removed from here for this specific question type */}
+                  </div>
+                ))}
               </div>
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2 ml-2 flex justify-between items-start">
-                  <div className="flex-1 text-lg text-black font-local2 pr-4">
-                    <span className="mr-2">{String.fromCharCode(97 + subIdx)})</span>
-                    <span>{renderMaybeMath(subQ.text || q.question)}</span>
-                  </div>
-                  {/* Marks removed from here for this specific question type */}
-                </div>
-              ))}
-            </div>
-          ))}
+            );
+          })}
         </div>
       );
     }
@@ -1145,26 +1221,29 @@ const Paper = () => {
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2 flex justify-between items-start">
-                  <div className="flex-1 text-lg text-black font-local2 pr-4">
-                    <span className="mr-2">{getRomanSubIndex(idx)})</span>
-                    {q.options && q.options.length > 0 && (
-                      <span className="inline-flex flex-wrap gap-4">
-                        {q.options.map((opt: string, optIdx: number) => (
-                          <span key={optIdx} className="inline-flex items-center gap-1">
-                            <span className="text-2xl leading-none">☐</span>
-                            <span>{renderMaybeMath(opt)}</span>
-                          </span>
-                        ))}
-                      </span>
-                    )}
+              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => {
+                const qNum = runningQuestionIndex++;
+                return (
+                  <div key={subIdx} className="mb-2 flex justify-between items-start">
+                    <div className="flex-1 text-lg text-black font-local2 pr-4">
+                      <span className="mr-2">{getRomanSubIndex(qNum)})</span>
+                      {q.options && q.options.length > 0 && (
+                        <span className="inline-flex flex-wrap gap-4">
+                          {q.options.map((opt: string, optIdx: number) => (
+                            <span key={optIdx} className="inline-flex items-center gap-1">
+                              <span className="text-2xl leading-none">☐</span>
+                              <span>{renderMaybeMath(opt)}</span>
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </div>
+                    <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
+                      {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
+                    </div>
                   </div>
-                  <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
-                    {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </div>
@@ -1185,28 +1264,31 @@ const Paper = () => {
           </h3>
           {questions.map((q: any, idx: number) => (
             <div key={idx} className="mb-4 ml-5">
-              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => (
-                <div key={subIdx} className="mb-2">
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1 text-lg text-black font-local2 pr-4">
-                      <span className="mr-2">{getRomanSubIndex(idx)})</span>
-                      <span>{renderMaybeMath(subQ.text || q.question)}</span>
+              {(q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions : [{ text: q.question }]).map((subQ: any, subIdx: number) => {
+                const qNum = runningQuestionIndex++;
+                return (
+                  <div key={subIdx} className="mb-2">
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1 text-lg text-black font-local2 pr-4">
+                        <span className="mr-2">{getRomanSubIndex(qNum)})</span>
+                        <span>{renderMaybeMath(subQ)}</span>
+                      </div>
+                      <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
+                        {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
+                      </div>
                     </div>
-                    <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
-                      {showIndividualMarks && subIdx === 0 && (q.mark || q.marks) ? `[${formatMarks(q.mark || q.marks)}]` : null}
-                    </div>
+                    {q.imageUrl && (
+                      <div className="mt-2 ml-6">
+                        <img
+                          src={q.imageUrl}
+                          alt="Match"
+                          className="max-w-full h-auto max-h-[200px] object-contain border border-gray-200 rounded"
+                        />
+                      </div>
+                    )}
                   </div>
-                  {q.imageUrl && (
-                    <div className="mt-2 ml-6">
-                      <img
-                        src={q.imageUrl}
-                        alt="Match"
-                        className="max-w-full h-auto max-h-[200px] object-contain border border-gray-200 rounded"
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </div>
@@ -1228,7 +1310,7 @@ const Paper = () => {
           <div key={idx} className="mb-4 ml-8">
             <div className="flex justify-between items-start text-lg text-black font-local2">
               <div className="flex-1 pr-4">
-                <span className="mr-2">{getRomanSubIndex(idx)})</span>
+                <span className="mr-2">{getRomanSubIndex(runningQuestionIndex++)})</span>
                 <span>{renderMaybeMath(q.question)}</span>
               </div>
               <div className="font-bold whitespace-nowrap ml-4 text-black text-lg">
@@ -2167,13 +2249,13 @@ const Paper = () => {
                                   <div className="space-y-2">
                                     {q.subQuestions.map((subQ: string, index: number) => (
                                       <div key={index} className="text-gray-800">
-                                        {index + 1}. {isMathSubjectValue(selectedSubject) ? <InlineMath math={`\\mathrm{${unescapeLatex(subQ)}}`} /> : subQ}
+                                        {index + 1}. {renderMaybeMath(subQ)}
                                       </div>
                                     ))}
                                   </div>
                                 ) : (
                                   <div className="text-gray-800">
-                                    {isMathSubjectValue(selectedSubject) ? <InlineMath math={`\\mathrm{${unescapeLatex(q.text)}}`} /> : q.text}
+                                    {renderMaybeMath(q.text)}
                                   </div>
                                 )}
                               </>
@@ -2213,7 +2295,7 @@ const Paper = () => {
                                 <div className="space-y-1">
                                   {q.options.map((option: any, index: number) => (
                                     <div key={index} className="text-sm">
-                                      {String.fromCharCode(65 + index)}. {isMathSubjectValue(selectedSubject) ? <InlineMath math={`\\mathrm{${unescapeLatex(option.text || option)}}`} renderError={() => <span>{option.text || option}</span>} /> : (option.text || option)}
+                                      {String.fromCharCode(65 + index)}. {renderMaybeMath(option)}
                                     </div>
                                   ))}
                                 </div>
@@ -2226,7 +2308,7 @@ const Paper = () => {
                                 <div className="space-y-1">
                                   {q.options.map((option: any, index: number) => (
                                     <div key={index} className="text-sm">
-                                      {String.fromCharCode(65 + index)}. {isMathSubjectValue(selectedSubject) ? <InlineMath math={`\\mathrm{${unescapeLatex(option.text || option)}}`} renderError={() => <span>{option.text || option}</span>} /> : (option.text || option)}
+                                      {String.fromCharCode(65 + index)}. {renderMaybeMath(option)}
                                     </div>
                                   ))}
                                 </div>

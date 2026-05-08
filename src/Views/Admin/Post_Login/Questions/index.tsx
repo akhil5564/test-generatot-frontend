@@ -42,10 +42,10 @@ import { InlineMath } from 'react-katex';
 import 'katex/dist/katex.min.css';
 
 // Helper to detect Math/Maths subject (case/space insensitive)
-const isMathSubjectValue = (subject?: string): boolean => {
+const isMathSubjectValue = (subject: string | undefined): boolean => {
   if (!subject) return false;
-  const subjectLower = String(subject).trim().toLowerCase();
-  return subjectLower === 'math' || subjectLower === 'maths' || subjectLower === 'mathematics';
+  const s = subject.toLowerCase().replace(/\s/g, '');
+  return s.includes('math') || s.includes('physics') || s.includes('chem') || s.includes('science') || s.includes('biology') || s.includes('evs');
 };
 
 // Helper to unescape LaTeX backslashes from API response
@@ -53,6 +53,47 @@ const unescapeLatex = (text: string | undefined): string => {
   if (!text || typeof text !== 'string') return text || '';
   // Replace double backslashes with single backslash
   return text.replace(/\\\\/g, '\\');
+};
+
+// Robust text renderer for both math and standard text
+const renderMath = (text: any, isMath: boolean) => {
+  if (text === undefined || text === null) return null;
+
+  let resolvedText = '';
+  if (typeof text === 'object') {
+    resolvedText = text.text || text.question || text.qtitle || text.title || text.name || text.label || text.choices || text.value || text.content || '';
+    if (!resolvedText) {
+      try {
+        if (!text.$$typeof) {
+          resolvedText = JSON.stringify(text);
+        }
+      } catch (e) {
+        resolvedText = 'Object';
+      }
+    }
+  } else {
+    resolvedText = String(text || '');
+  }
+
+  // Filter out literal "[object Object]" strings that might be in the DB
+  if (resolvedText === '[object Object]') {
+    resolvedText = '[Corrupted Data - Please Re-save]';
+  }
+
+  if (!resolvedText) return null;
+
+  if (isMath) {
+    const mathText = unescapeLatex(String(resolvedText));
+    return (
+      <div className="math-preview" onClick={(e) => e.stopPropagation()}>
+        <InlineMath
+          math={`\\mathrm{${mathText}}`}
+          renderError={() => <span>{String(resolvedText)}</span>}
+        />
+      </div>
+    );
+  }
+  return String(resolvedText);
 };
 
 // Helper to format marks - converts .5 decimals to fraction format
@@ -79,6 +120,8 @@ const formatMarks = (marks: number | undefined | null): string => {
   // For other decimals, return as is
   return String(num);
 };
+
+
 
 const Questions: React.FC = () => {
   const navigate = useNavigate();
@@ -317,21 +360,9 @@ const Questions: React.FC = () => {
       dataIndex: "question",
       key: "question",
       width: 450,
-      render: (text: string, record: QuestionListItem) => {
-        if (!text) return "";
+      render: (text: any, record: QuestionListItem) => {
         const isMath = isMathSubjectValue(record.subject);
-        if (isMath) {
-          try {
-            return (
-              <div className="math-preview" onClick={(e) => e.stopPropagation()}>
-                <InlineMath math={`\\mathrm{${unescapeLatex(text)}}`} />
-              </div>
-            );
-          } catch (e) {
-            return text;
-          }
-        }
-        return text;
+        return renderMath(text, isMath);
       }
     },
     {
@@ -623,7 +654,7 @@ const Questions: React.FC = () => {
             const questions: string[] = [];
             // Add question field if it exists and is not null
             if (selectedQuestion.question && selectedQuestion.question !== null && selectedQuestion.question !== 'null' && String(selectedQuestion.question).trim().length > 0) {
-              questions.push(String(selectedQuestion.question));
+              questions.push(selectedQuestion.question);
             }
             // Add question1, question2, etc. if they exist and are not null
             // Access dynamic fields using bracket notation with any type
@@ -631,8 +662,8 @@ const Questions: React.FC = () => {
             for (let i = 1; i <= 5; i++) {
               const qKey = `question${i}`;
               const qValue = questionData[qKey];
-              if (qValue !== null && qValue !== undefined && qValue !== 'null' && String(qValue).trim().length > 0) {
-                questions.push(String(qValue));
+              if (qValue !== null && qValue !== undefined && qValue !== 'null' && (typeof qValue === 'object' || String(qValue).trim().length > 0)) {
+                questions.push(qValue);
               }
             }
             allQuestions = questions;
@@ -664,7 +695,7 @@ const Questions: React.FC = () => {
                       <div key={index} className="p-3 bg-gray-50 rounded">
                         <span className="font-medium mr-2">{index + 1}.</span>
                         <span>
-                          {isMathSubjectValue(selectedQuestion.subject) ? <InlineMath math={`\\mathrm{${unescapeLatex(q)}}`} /> : q}
+                          {renderMath(q, isMathSubjectValue(selectedQuestion.subject))}
                         </span>
                       </div>
                     ))}
@@ -674,7 +705,7 @@ const Questions: React.FC = () => {
                 <div>
                   <strong>Question:</strong>
                   <div className="mt-1 p-3 bg-gray-50 rounded">
-                    {isMathSubjectValue(selectedQuestion.subject) ? <InlineMath math={`\\mathrm{${unescapeLatex(selectedQuestion.question)}}`} /> : selectedQuestion.question}
+                    {renderMath(selectedQuestion.question, isMathSubjectValue(selectedQuestion.subject))}
                   </div>
                 </div>
               ) : null}
@@ -740,7 +771,9 @@ const Questions: React.FC = () => {
                     <div className="mt-2 space-y-2">
                       {selectedQuestion.options.map((option: any, index: number) => {
                         // Handle different option structures
-                        const optionText = option?.text || option?.label || option || '';
+                        const optionText = typeof option === 'object'
+                          ? (option.text || option.question || option.qtitle || option.title || option.name || option.label || option.choices || option.value || option.content || '')
+                          : String(option || '');
                         const isCorrect = option?.isCorrect ||
                           (Array.isArray(selectedQuestion.correctAnswer) && selectedQuestion.correctAnswer.includes(index)) ||
                           selectedQuestion.correctAnswer === index;
@@ -749,7 +782,7 @@ const Questions: React.FC = () => {
                           <div key={index} className="flex items-center p-2 bg-gray-50 rounded">
                             <span className="font-medium mr-2">{String.fromCharCode(65 + index)}.</span>
                             <span className="flex-1">
-                              {isMathSubjectValue(selectedQuestion.subject) ? <InlineMath math={`\\mathrm{${unescapeLatex(optionText)}}`} /> : optionText}
+                              {renderMath(option, isMathSubjectValue(selectedQuestion.subject))}
                             </span>
                             {isCorrect && (
                               <Tag color="green" size="small">Correct</Tag>
