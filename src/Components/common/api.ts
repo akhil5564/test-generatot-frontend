@@ -2,8 +2,8 @@
 // Lightweight API helper
 import { message } from "antd";
 
-// export const BASE_URL = "https://childcraft-server.onrender.com";
-export const BASE_URL = "http://localhost:5000";
+export const BASE_URL = "https://childcraft-server.onrender.com";
+// export const BASE_URL = "http://localhost:5000";
 
 
 export const API = {
